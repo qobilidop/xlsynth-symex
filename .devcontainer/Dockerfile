@@ -17,7 +17,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates clang cmake curl git \
         libc++-18-dev libc++abi-18-dev libssl-dev libz3-dev pkg-config \
-        pre-commit protobuf-compiler python3 python3-pip unzip z3 \
+        protobuf-compiler unzip z3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \

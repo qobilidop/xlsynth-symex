@@ -12,14 +12,16 @@ initial prototyping phase; references and prior art belong in
 All project development commands should run through `./dev.sh` in the
 Ubuntu-based development container. The container uses the versioned Ubuntu
 24.04 base image and follows `xlsynth-crate` conventions where applicable:
-nightly Rust, rustfmt, Clippy, pre-commit, LLVM/libc++, protobuf, and Z3
-tooling. The nightly toolchain is date-pinned in `rust-toolchain.toml`.
+nightly Rust, rustfmt, Clippy, LLVM/libc++, protobuf, and Z3 tooling. The
+nightly toolchain is date-pinned in `rust-toolchain.toml`.
 
 The same Dockerfile is used locally and by CI. GitHub Actions validates the
-image for pull requests and publishes multi-platform `main` and immutable
-commit-SHA tags to GHCR after changes land on `main`. The wrapper prefers the
-published image and falls back to building it locally, so the checked-in
-Dockerfile remains the bootstrap path.
+image for pull requests and publishes `main` and immutable commit-SHA tags to
+GHCR after changes land on `main`. The image currently targets `linux/amd64`
+because `xlsynth-sys` does not provide Linux ARM64 artifacts; Apple Silicon
+hosts use Docker's x86 emulation. The wrapper prefers the published image and
+falls back to building it locally, so the checked-in Dockerfile remains the
+bootstrap path.
 
 ## Purpose
 

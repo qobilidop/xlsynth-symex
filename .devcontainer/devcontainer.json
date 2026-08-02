@@ -3,5 +3,6 @@
   "image": "ghcr.io/qobilidop/xlsynth-symex/dev:main",
   "workspaceFolder": "/workspace/xlsynth-symex",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/xlsynth-symex,type=bind",
+  "runArgs": ["--platform=linux/amd64"],
   "remoteUser": "root"
 }

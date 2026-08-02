@@ -8,6 +8,7 @@ readonly image="${XLSYNTH_SYMEX_DEV_IMAGE:-ghcr.io/qobilidop/xlsynth-symex/dev:m
 
 build_image() {
   docker build --file "${repo_dir}/.devcontainer/Dockerfile" \
+    --platform linux/amd64 \
     --tag "${image}" "${repo_dir}"
 }
 
@@ -33,6 +34,7 @@ fi
 
 docker_args=(
   run --rm
+  --platform linux/amd64
   --volume "${repo_dir}:/workspace/xlsynth-symex"
   --workdir /workspace/xlsynth-symex
   --env HOME=/tmp/xlsynth-symex-home
