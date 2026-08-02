@@ -298,19 +298,29 @@ operational meaning without claiming to reproduce DSLX source control flow.
 The initial project seeks strong validation, not a formal proof of the
 implementation or exhaustive path enumeration.
 
-### Concrete differential testing
+### Curated-vector differential testing
 
-For concrete assignments to all symbolic inputs:
+For deliberately selected concrete assignments to all symbolic inputs:
 
 1. evaluate the symbolic result under the assignment;
 2. run the same inputs through the XLS interpreter or JIT; and
 3. compare the complete typed values.
 
-Small total input spaces should be exhausted. Larger tests should combine
-random values with structured edge cases such as zero, all ones, signed
-boundaries, powers of two, alternating bits, and boundary indices and shifts.
+Curated vectors should include upstream example vectors, structured edge cases
+such as zero, all ones, signed boundaries, powers of two, alternating bits, and
+boundary indices and shifts, plus minimized fuzz failures promoted to permanent
+regressions.
 
-### Solver-guided path witnesses
+### Differential fuzz testing
+
+Differential fuzz testing applies the same concrete comparison to generated
+inputs. Small total input spaces should be exhausted. Larger tests should use
+stable per-corpus seeds and bounded case counts in ordinary CI, with broader or
+rotating campaigns available separately. Failures must report enough metadata
+to replay the exact case. Type-aware and correlated generators should be added
+as tuples, arrays, and mixed argument partitions enter the supported corpus.
+
+### Path-witness replay
 
 For each feasible enumerated path, solve its path condition, replay one or more
 models concretely, compare the result with XLS, and confirm that the concrete
@@ -318,7 +328,7 @@ selection trace agrees with the symbolic trace. Multiple models per path should
 exercise boundaries within a path; one witness covers control but not all
 arithmetic behavior.
 
-### Symbolic equivalence
+### Symbolic equivalence checking
 
 Where supported, compare the complete symbolic result against XLS's independent
 SMT translation. Ask whether:
@@ -331,6 +341,13 @@ is satisfiable. `UNSAT` establishes equivalence for the modeled inputs and
 operations relative to the trusted XLS translation. `SAT` yields a concrete
 counterexample for replay; timeout or `UNKNOWN` falls back to differential
 testing.
+
+These four names are canonical across design documentation, manifests, tests,
+and reports: **curated-vector differential testing**, **differential fuzz
+testing**, **symbolic equivalence checking**, and **path-witness replay**.
+Every corpus entry and IR form declares each validation as required, blocked by
+a named capability, or not applicable. A blocked validation is neither a pass
+nor a silent skip.
 
 ### Enumeration confidence
 
@@ -374,6 +391,10 @@ described by a tab-separated manifest. The harness compiles each fixture with
 the bundled DSLX standard library and exercises the selected pure function in
 both unoptimized and optimized IR forms. Deterministic concrete samples are
 evaluated by the XLS interpreter and asserted against the symbolic SMT result.
+Stable per-entry seeds and case budgets drive differential fuzz testing; the
+small `tiny_adder` domain is exhausted. A separate validation matrix records
+requirements and capability blockers for all four validation modes per IR
+form.
 
 The initial curated slice covers widened addition (`tiny_adder`), nested
 selection (`nested_sel`), and the opcode decoder from `riscv_simple`. Corpus
@@ -381,6 +402,12 @@ cases gate only when both IR forms are supported. Examples whose unoptimized IR
 contains operations rejected by the current XLS SMT translator, such as
 `counted_for`, should be added later with an explicit capability-status model
 rather than silently skipping a validation mode.
+
+Until the native evaluator exists, symbolic equivalence is blocked because the
+candidate encoding and XLS reference encoding would be the same translation.
+Until explicit path enumeration and canonical selection traces exist,
+path-witness replay is blocked. The corpus matrix records both limitations
+explicitly so later implementation changes can promote them to required gates.
 
 Useful measurements include operation and type coverage, expression DAG size,
 paths and choice outcomes, concretely pruned selects, visited IR nodes,

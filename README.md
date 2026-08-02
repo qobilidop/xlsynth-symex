@@ -45,7 +45,10 @@ with the upstream SMT output and run deterministic generated IR programs
 against both Z3 and the XLS interpreter. An offline curated corpus also compiles
 pinned upstream XLS examples and checks selected pure functions in optimized
 and unoptimized forms. See `tests/corpus/curated/README.md` for its provenance
-and extension workflow.
+and extension workflow. The corpus uses curated-vector differential testing and
+deterministic differential fuzz testing today, while explicitly tracking the
+native-evaluator prerequisites for symbolic equivalence checking and
+path-witness replay.
 
 See:
 

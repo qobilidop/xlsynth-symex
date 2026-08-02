@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Offline, provenance-pinned tests over curated upstream XLS examples.
+//! Offline, provenance-pinned validation of curated upstream XLS examples.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use xlsynth::{
-    DslxConvertOptions, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name, optimize_ir,
+    DslxConvertOptions, IrFunction, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name,
+    optimize_ir,
 };
 use xlsynth_symex::evaluate;
 
 const MANIFEST: &str = include_str!("corpus/curated/manifest.tsv");
+const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
+const SYMBOLIC_EQUIVALENCE_BLOCKER: &str = "blocked:native-symbolic-evaluator";
+const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
+
+type BitsInput = Vec<(usize, u64)>;
 
 #[derive(Debug)]
 struct ManifestEntry<'a> {
@@ -27,6 +34,8 @@ struct ManifestEntry<'a> {
     argument_partition: &'a str,
     required_features: &'a str,
     license: &'a str,
+    fuzz_cases: usize,
+    fuzz_seed: u64,
 }
 
 impl<'a> ManifestEntry<'a> {
@@ -34,8 +43,8 @@ impl<'a> ManifestEntry<'a> {
         let fields: Vec<_> = line.split('\t').collect();
         assert_eq!(
             fields.len(),
-            10,
-            "curated corpus manifest row must have 10 tab-separated fields: {line}"
+            12,
+            "curated corpus manifest row must have 12 tab-separated fields: {line}"
         );
         Self {
             id: fields[0],
@@ -48,6 +57,11 @@ impl<'a> ManifestEntry<'a> {
             argument_partition: fields[7],
             required_features: fields[8],
             license: fields[9],
+            fuzz_cases: fields[10].parse().unwrap_or_else(|error| {
+                panic!("{} has invalid fuzz case count: {error}", fields[0])
+            }),
+            fuzz_seed: u64::from_str_radix(fields[11], 16)
+                .unwrap_or_else(|error| panic!("{} has invalid fuzz seed: {error}", fields[0])),
         }
     }
 
@@ -60,7 +74,16 @@ impl<'a> ManifestEntry<'a> {
         }
     }
 
-    fn samples(&self) -> Vec<Vec<(usize, u64)>> {
+    fn input_widths(&self) -> &'static [usize] {
+        match self.id {
+            "tiny_adder" => &[1, 1],
+            "nested_sel" => &[8, 8, 8, 8, 8, 8],
+            "riscv_decode_opcode" => &[32],
+            id => panic!("manifest entry has no input shape: {id}"),
+        }
+    }
+
+    fn curated_vectors(&self) -> Vec<BitsInput> {
         match self.id {
             "tiny_adder" => vec![
                 vec![(1, 0), (1, 0)],
@@ -70,46 +93,233 @@ impl<'a> ManifestEntry<'a> {
             ],
             "nested_sel" => vec![
                 vec![(8, 0), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
+                vec![(8, 3), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
+                vec![(8, 4), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
                 vec![(8, 6), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
                 vec![(8, 7), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
-                vec![(8, 33), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
                 vec![(8, 8), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
+                vec![(8, 32), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
+                vec![(8, 33), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
+                vec![(8, 255), (8, 11), (8, 22), (8, 33), (8, 44), (8, 55)],
             ],
             "riscv_decode_opcode" => vec![
                 vec![(32, 0)],
+                vec![(32, 0b0000011)],
+                vec![(32, 0b0010011)],
                 vec![(32, 0b0110011)],
+                vec![(32, 0b1100011)],
                 vec![(32, 0xffff_ffff)],
                 vec![(32, 0x1234_56b7)],
             ],
-            id => panic!("manifest entry has no deterministic samples: {id}"),
+            id => panic!("manifest entry has no curated vectors: {id}"),
+        }
+    }
+
+    fn fuzz_vectors(&self) -> Vec<BitsInput> {
+        if self.id == "tiny_adder" {
+            return (0..self.fuzz_cases)
+                .map(|case| vec![(1, (case & 1) as u64), (1, ((case >> 1) & 1) as u64)])
+                .collect();
+        }
+
+        let mut rng = DeterministicRng::new(self.fuzz_seed);
+        (0..self.fuzz_cases)
+            .map(|_| {
+                self.input_widths()
+                    .iter()
+                    .map(|width| (*width, rng.next() & bit_mask(*width)))
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum IrForm {
+    Unoptimized,
+    Optimized,
+}
+
+impl IrForm {
+    const ALL: [Self; 2] = [Self::Unoptimized, Self::Optimized];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Unoptimized => "unoptimized",
+            Self::Optimized => "optimized",
+        }
+    }
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "unoptimized" => Self::Unoptimized,
+            "optimized" => Self::Optimized,
+            value => panic!("unknown IR form in validation matrix: {value}"),
         }
     }
 }
 
-fn manifest_entries() -> Vec<ManifestEntry<'static>> {
-    MANIFEST
-        .lines()
+#[derive(Debug)]
+struct ValidationEntry<'a> {
+    id: &'a str,
+    ir_form: IrForm,
+    curated_vector_differential: &'a str,
+    differential_fuzz: &'a str,
+    symbolic_equivalence: &'a str,
+    path_witness_replay: &'a str,
+}
+
+impl<'a> ValidationEntry<'a> {
+    fn parse(line: &'a str) -> Self {
+        let fields: Vec<_> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            6,
+            "validation matrix row must have 6 tab-separated fields: {line}"
+        );
+        Self {
+            id: fields[0],
+            ir_form: IrForm::parse(fields[1]),
+            curated_vector_differential: fields[2],
+            differential_fuzz: fields[3],
+            symbolic_equivalence: fields[4],
+            path_witness_replay: fields[5],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DifferentialMode {
+    CuratedVector,
+    Fuzz,
+}
+
+impl DifferentialMode {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::CuratedVector => "curated-vector differential",
+            Self::Fuzz => "differential fuzz",
+        }
+    }
+}
+
+struct DeterministicRng(u64);
+
+impl DeterministicRng {
+    const fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+}
+
+const fn bit_mask(width: usize) -> u64 {
+    if width == 64 {
+        u64::MAX
+    } else {
+        (1_u64 << width) - 1
+    }
+}
+
+fn data_lines(data: &'static str) -> impl Iterator<Item = &'static str> {
+    data.lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(ManifestEntry::parse)
+}
+
+fn manifest_entries() -> Vec<ManifestEntry<'static>> {
+    data_lines(MANIFEST).map(ManifestEntry::parse).collect()
+}
+
+fn validation_entries() -> Vec<ValidationEntry<'static>> {
+    data_lines(VALIDATION_MATRIX)
+        .map(ValidationEntry::parse)
         .collect()
 }
 
-fn assert_smt_matches_interpreter(
+fn compile_entry(entry: &ManifestEntry) -> (IrPackage, IrPackage, String) {
+    let converted = convert_dslx_to_ir(
+        entry.source(),
+        Path::new(entry.fixture),
+        &DslxConvertOptions::default(),
+    )
+    .unwrap_or_else(|error| panic!("{}: DSLX conversion failed: {error}", entry.id));
+    assert!(
+        converted.warnings.is_empty(),
+        "{}: DSLX conversion emitted warnings: {:?}",
+        entry.id,
+        converted.warnings
+    );
+    let function_name = mangle_dslx_name(entry.module, entry.function)
+        .unwrap_or_else(|error| panic!("{}: failed to mangle function name: {error}", entry.id));
+    let optimized = optimize_ir(&converted.ir, &function_name)
+        .unwrap_or_else(|error| panic!("{}: IR optimization failed: {error}", entry.id));
+    (converted.ir, optimized, function_name)
+}
+
+fn assert_differential_samples(
     entry: &ManifestEntry,
-    optimization: &str,
+    ir_form: IrForm,
+    mode: DifferentialMode,
+    function: &IrFunction,
     function_name: &str,
-    smtlib: &str,
-    args: &[(usize, u64)],
-    expected_width: usize,
-    expected: u64,
+    samples: &[BitsInput],
 ) {
-    let arguments = args
-        .iter()
-        .map(|(width, value)| format!(" (_ bv{value} {width})"))
-        .collect::<String>();
-    let application = format!("(select {function_name}{arguments})");
+    assert!(
+        !samples.is_empty(),
+        "{}: no {} samples",
+        entry.id,
+        mode.name()
+    );
+    let symbolic = evaluate(function).unwrap_or_else(|error| {
+        panic!(
+            "{} ({}): symbolic evaluation failed during {} testing: {error}",
+            entry.id,
+            ir_form.name(),
+            mode.name()
+        )
+    });
+
+    let mut mismatches = Vec::with_capacity(samples.len());
+    for (case, sample) in samples.iter().enumerate() {
+        let args: Vec<_> = sample
+            .iter()
+            .map(|(width, value)| IrValue::make_ubits(*width, *value).unwrap())
+            .collect();
+        let expected = function.interpret(&args).unwrap_or_else(|error| {
+            panic!(
+                "{} ({}, {} case {case}): XLS interpreter failed for {sample:?}: {error}",
+                entry.id,
+                ir_form.name(),
+                mode.name()
+            )
+        });
+        let expected_width = expected.bit_count().unwrap();
+        let expected = expected.to_u64().unwrap_or_else(|error| {
+            panic!(
+                "{} ({}, {} case {case}): result does not fit the bits-only harness: {error}",
+                entry.id,
+                ir_form.name(),
+                mode.name()
+            )
+        });
+        let arguments = sample
+            .iter()
+            .map(|(width, value)| format!(" (_ bv{value} {width})"))
+            .collect::<String>();
+        mismatches.push(format!(
+            "(not (= (select {function_name}{arguments}) (_ bv{expected} {expected_width})))"
+        ));
+    }
+
     let query = format!(
-        "{smtlib}\n(assert (not (= {application} (_ bv{expected} {expected_width}))))\n(check-sat)\n"
+        "{}\n(assert (or\n  {}))\n(check-sat)\n",
+        symbolic.result_smtlib,
+        mismatches.join("\n  ")
     );
     let mut child = Command::new("z3")
         .arg("-in")
@@ -127,71 +337,62 @@ fn assert_smt_matches_interpreter(
     let output = child.wait_with_output().expect("z3 must finish");
     assert!(
         output.status.success(),
-        "{} ({optimization}) z3 failed for arguments {args:?}\nstdout: {}\nstderr: {}\nquery:\n{query}",
+        "{} ({}, {}) z3 failed for {} samples\nstdout: {}\nstderr: {}",
         entry.id,
+        ir_form.name(),
+        mode.name(),
+        samples.len(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "unsat",
-        "{} ({optimization}) symbolic result differs from the XLS interpreter for arguments {args:?}\nquery:\n{query}",
+        "{} ({}) failed {} testing over {} samples (seed {:016x})",
         entry.id,
+        ir_form.name(),
+        mode.name(),
+        samples.len(),
+        entry.fuzz_seed,
     );
 }
 
-fn exercise_package(entry: &ManifestEntry, package: &IrPackage, optimization: &str) {
-    let function_name = mangle_dslx_name(entry.module, entry.function)
-        .unwrap_or_else(|error| panic!("{}: failed to mangle function name: {error}", entry.id));
-    let function = package
-        .get_function(&function_name)
-        .unwrap_or_else(|error| {
-            panic!(
-                "{} ({optimization}): function {function_name} is absent: {error}",
-                entry.id
-            )
-        });
-    let symbolic = evaluate(&function).unwrap_or_else(|error| {
-        panic!(
-            "{} ({optimization}): symbolic evaluation failed: {error}",
-            entry.id
-        )
-    });
-
-    for sample in entry.samples() {
-        let args: Vec<_> = sample
-            .iter()
-            .map(|(width, value)| IrValue::make_ubits(*width, *value).unwrap())
-            .collect();
-        let expected = function.interpret(&args).unwrap_or_else(|error| {
-            panic!(
-                "{} ({optimization}): XLS interpreter failed for {sample:?}: {error}",
-                entry.id
-            )
-        });
-        let expected_width = expected.bit_count().unwrap();
-        let expected = expected.to_u64().unwrap();
-        assert_smt_matches_interpreter(
-            entry,
-            optimization,
-            &function_name,
-            &symbolic.result_smtlib,
-            &sample,
-            expected_width,
-            expected,
-        );
+fn run_differential_validation(mode: DifferentialMode) {
+    for entry in manifest_entries() {
+        let samples = match mode {
+            DifferentialMode::CuratedVector => entry.curated_vectors(),
+            DifferentialMode::Fuzz => entry.fuzz_vectors(),
+        };
+        let (unoptimized, optimized, function_name) = compile_entry(&entry);
+        for (ir_form, package) in [
+            (IrForm::Unoptimized, &unoptimized),
+            (IrForm::Optimized, &optimized),
+        ] {
+            let function = package
+                .get_function(&function_name)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} ({}): function {function_name} is absent: {error}",
+                        entry.id,
+                        ir_form.name()
+                    )
+                });
+            assert_differential_samples(&entry, ir_form, mode, &function, &function_name, &samples);
+        }
     }
 }
 
 #[test]
-fn curated_manifest_is_valid() {
+fn curated_manifest_and_validation_matrix_are_complete() {
     let entries = manifest_entries();
     assert!(
         !entries.is_empty(),
         "curated corpus manifest must not be empty"
     );
-
-    for entry in entries {
+    let mut ids = BTreeSet::new();
+    let mut fuzz_seeds = BTreeSet::new();
+    for entry in &entries {
+        assert!(ids.insert(entry.id), "duplicate corpus id: {}", entry.id);
         assert_eq!(
             entry.repository, UPSTREAM_REPOSITORY,
             "{} repository",
@@ -210,45 +411,82 @@ fn curated_manifest_is_valid() {
         );
         assert!(!entry.required_features.is_empty(), "{} features", entry.id);
         assert_eq!(entry.license, "Apache-2.0", "{} license", entry.id);
+        assert!(entry.fuzz_cases > 0, "{} fuzz case count", entry.id);
+        assert!(
+            fuzz_seeds.insert(entry.fuzz_seed),
+            "duplicate fuzz seed: {:016x}",
+            entry.fuzz_seed
+        );
         assert!(!entry.source().is_empty(), "{} fixture", entry.id);
-        assert!(!entry.samples().is_empty(), "{} samples", entry.id);
+        assert!(
+            !entry.curated_vectors().is_empty(),
+            "{} curated vectors",
+            entry.id
+        );
+    }
+
+    let validations = validation_entries();
+    assert_eq!(validations.len(), entries.len() * IrForm::ALL.len());
+    let mut validation_keys = BTreeSet::new();
+    for validation in validations {
+        assert!(
+            ids.contains(validation.id),
+            "unknown validation id: {}",
+            validation.id
+        );
+        assert!(
+            validation_keys.insert((validation.id, validation.ir_form)),
+            "duplicate validation row: {} {}",
+            validation.id,
+            validation.ir_form.name()
+        );
+        assert_eq!(validation.curated_vector_differential, "required");
+        assert_eq!(validation.differential_fuzz, "required");
+    }
+    for id in ids {
+        for ir_form in IrForm::ALL {
+            assert!(
+                validation_keys.contains(&(id, ir_form)),
+                "missing validation row: {} {}",
+                id,
+                ir_form.name()
+            );
+        }
     }
 }
 
-fn exercise_entry(id: &str) {
-    let entry = manifest_entries()
-        .into_iter()
-        .find(|entry| entry.id == id)
-        .unwrap_or_else(|| panic!("curated corpus manifest has no {id} entry"));
-    let path = Path::new(entry.fixture);
-    let converted = convert_dslx_to_ir(entry.source(), path, &DslxConvertOptions::default())
-        .unwrap_or_else(|error| panic!("{}: DSLX conversion failed: {error}", entry.id));
-    assert!(
-        converted.warnings.is_empty(),
-        "{}: DSLX conversion emitted warnings: {:?}",
-        entry.id,
-        converted.warnings
-    );
-
-    exercise_package(&entry, &converted.ir, "unoptimized");
-
-    let top = mangle_dslx_name(entry.module, entry.function).unwrap();
-    let optimized = optimize_ir(&converted.ir, &top)
-        .unwrap_or_else(|error| panic!("{}: IR optimization failed: {error}", entry.id));
-    exercise_package(&entry, &optimized, "optimized");
+#[test]
+fn curated_vector_differential_testing() {
+    run_differential_validation(DifferentialMode::CuratedVector);
 }
 
 #[test]
-fn tiny_adder_matches_xls_interpreter() {
-    exercise_entry("tiny_adder");
+fn differential_fuzz_testing() {
+    run_differential_validation(DifferentialMode::Fuzz);
 }
 
 #[test]
-fn nested_sel_matches_xls_interpreter() {
-    exercise_entry("nested_sel");
+fn symbolic_equivalence_checking_is_capability_gated() {
+    for validation in validation_entries() {
+        assert_eq!(
+            validation.symbolic_equivalence,
+            SYMBOLIC_EQUIVALENCE_BLOCKER,
+            "{} {} symbolic equivalence status",
+            validation.id,
+            validation.ir_form.name()
+        );
+    }
 }
 
 #[test]
-fn riscv_decode_opcode_matches_xls_interpreter() {
-    exercise_entry("riscv_decode_opcode");
+fn path_witness_replay_is_capability_gated() {
+    for validation in validation_entries() {
+        assert_eq!(
+            validation.path_witness_replay,
+            PATH_WITNESS_REPLAY_BLOCKER,
+            "{} {} path-witness replay status",
+            validation.id,
+            validation.ir_form.name()
+        );
+    }
 }

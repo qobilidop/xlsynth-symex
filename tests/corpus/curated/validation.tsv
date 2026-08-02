@@ -1,0 +1,7 @@
+# id	ir_form	curated_vector_differential	differential_fuzz	symbolic_equivalence	path_witness_replay
+tiny_adder	unoptimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
+tiny_adder	optimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
+nested_sel	unoptimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
+nested_sel	optimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
+riscv_decode_opcode	unoptimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
+riscv_decode_opcode	optimized	required	required	blocked:native-symbolic-evaluator	blocked:selection-traces
