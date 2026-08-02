@@ -110,8 +110,11 @@ instruction concepts. A state transition is simply one possible XLS function.
 The evaluator parses XLS IR with `xlsynth-pir` and constructs its own typed
 SMT-LIB bit-vector expressions. The current slice returns one merged result
 whose path condition is `true`. It supports bits parameters and results, core
-arithmetic and Boolean operations, comparisons, extensions, static and dynamic
-slices, merged selects, and recursive calls to pure functions in the package.
+arithmetic and Boolean operations, reductions, comparisons, extensions, static
+and dynamic slices, merged selects, structural tuple construction and indexing,
+and recursive calls to pure functions in the package. Zero-width bits are
+carried structurally with no SMT term and disappear through operations such as
+concatenation and extension.
 
 Direct SMT expression strings are an expedient initial representation; they
 make the independent validation boundary available early but do not yet provide
@@ -397,18 +400,21 @@ small `tiny_adder` domain is exhausted. A separate validation matrix records
 requirements and capability blockers for all four validation modes per IR
 form.
 
-The initial curated slice covers widened addition (`tiny_adder`), nested
-selection (`nested_sel`), and the opcode decoder from `riscv_simple`. Corpus
+The curated slice currently covers widened addition (`tiny_adder`), nested
+selection (`nested_sel`), the opcode decoder from `riscv_simple`, and tuple- and
+multiplication-heavy overflow detection (`overflow_detect`). Corpus
 cases gate only when both IR forms are supported. Examples whose unoptimized IR
 contains operations rejected by the current XLS SMT translator, such as
 `counted_for`, should be added later with an explicit capability-status model
 rather than silently skipping a validation mode.
 
 Symbolic equivalence is required for every currently supported curated function
-and IR form. Until explicit path enumeration and canonical selection traces
-exist, path-witness replay remains blocked. The corpus matrix records this
-limitation explicitly so a later implementation can promote it to a required
-gate.
+and IR form where XLS's reference translator can produce a query. A known XLS
+translator abort on the zero-width-heavy unoptimized overflow example is
+recorded as an explicit reference-side blocker; the optimized form proves
+equivalent. Until explicit path enumeration and canonical selection traces
+exist, path-witness replay remains blocked. The corpus matrix records these
+limitations explicitly.
 
 Useful measurements include operation and type coverage, expression DAG size,
 paths and choice outcomes, concretely pruned selects, visited IR nodes,

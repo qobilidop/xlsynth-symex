@@ -17,6 +17,7 @@ const MANIFEST: &str = include_str!("corpus/curated/manifest.tsv");
 const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
+const XLS_REFERENCE_TRANSLATOR_BLOCKER: &str = "blocked:xls-reference-translator";
 const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
 
 type BitsInput = Vec<(usize, u64)>;
@@ -69,6 +70,7 @@ impl<'a> ManifestEntry<'a> {
             "tiny_adder.x" => include_str!("corpus/curated/tiny_adder.x"),
             "nested_sel.x" => include_str!("corpus/curated/nested_sel.x"),
             "riscv_simple.x" => include_str!("corpus/curated/riscv_simple.x"),
+            "overflow_detect.x" => include_str!("corpus/curated/overflow_detect.x"),
             fixture => panic!("manifest references unknown curated fixture: {fixture}"),
         }
     }
@@ -78,6 +80,7 @@ impl<'a> ManifestEntry<'a> {
             "tiny_adder" => &[1, 1],
             "nested_sel" => &[8, 8, 8, 8, 8, 8],
             "riscv_decode_opcode" => &[32],
+            "overflow_detect" => &[16, 16],
             id => panic!("manifest entry has no input shape: {id}"),
         }
     }
@@ -109,6 +112,13 @@ impl<'a> ManifestEntry<'a> {
                 vec![(32, 0b1100011)],
                 vec![(32, 0xffff_ffff)],
                 vec![(32, 0x1234_56b7)],
+            ],
+            "overflow_detect" => vec![
+                vec![(16, 0), (16, 0)],
+                vec![(16, 15), (16, 16)],
+                vec![(16, 255), (16, 1)],
+                vec![(16, 16), (16, 16)],
+                vec![(16, 65_535), (16, 65_535)],
             ],
             id => panic!("manifest entry has no curated vectors: {id}"),
         }
@@ -501,7 +511,16 @@ fn curated_manifest_and_validation_matrix_are_complete() {
         );
         assert_eq!(validation.curated_vector_differential, "required");
         assert_eq!(validation.differential_fuzz, "required");
-        assert_eq!(validation.symbolic_equivalence, "required");
+        assert!(
+            matches!(
+                validation.symbolic_equivalence,
+                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER
+            ),
+            "{} {} invalid symbolic equivalence status: {}",
+            validation.id,
+            validation.ir_form.name(),
+            validation.symbolic_equivalence
+        );
     }
     for id in ids {
         for ir_form in IrForm::ALL {
@@ -533,6 +552,14 @@ fn symbolic_equivalence_checking() {
             (IrForm::Unoptimized, &unoptimized),
             (IrForm::Optimized, &optimized),
         ] {
+            let validation = validation_entries()
+                .into_iter()
+                .find(|validation| validation.id == entry.id && validation.ir_form == ir_form)
+                .unwrap();
+            if validation.symbolic_equivalence == XLS_REFERENCE_TRANSLATOR_BLOCKER {
+                continue;
+            }
+            assert_eq!(validation.symbolic_equivalence, "required");
             let function = package.get_function(&function_name).unwrap();
             let symbolic = evaluate_package(package, &function_name).unwrap_or_else(|error| {
                 panic!(

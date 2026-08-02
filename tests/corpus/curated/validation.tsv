@@ -5,3 +5,5 @@ nested_sel	unoptimized	required	required	required	blocked:selection-traces
 nested_sel	optimized	required	required	required	blocked:selection-traces
 riscv_decode_opcode	unoptimized	required	required	required	blocked:selection-traces
 riscv_decode_opcode	optimized	required	required	required	blocked:selection-traces
+overflow_detect	unoptimized	required	required	blocked:xls-reference-translator	blocked:selection-traces
+overflow_detect	optimized	required	required	required	blocked:selection-traces

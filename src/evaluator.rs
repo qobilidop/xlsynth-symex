@@ -50,12 +50,16 @@ fn evaluate_parsed(package: &Package, function_name: &str) -> Result<SymexResult
         .collect::<Result<Vec<_>, _>>()?;
     let arguments = parameters
         .iter()
-        .map(|parameter| SymbolicBits {
-            bit_count: parameter.bit_count,
-            expression: parameter.name.clone(),
+        .map(|parameter| {
+            SymbolicValue::Bits(SymbolicBits {
+                bit_count: parameter.bit_count,
+                expression: parameter.name.clone(),
+            })
         })
         .collect();
-    let result = Evaluator { package }.evaluate_function(function, arguments)?;
+    let result = Evaluator { package }
+        .evaluate_function(function, arguments)?
+        .into_bits()?;
     let mut result_smtlib = parameters
         .iter()
         .map(|parameter| {
@@ -81,12 +85,27 @@ struct Evaluator<'a> {
     package: &'a Package,
 }
 
+#[derive(Clone, Debug)]
+enum SymbolicValue {
+    Bits(SymbolicBits),
+    Tuple(Vec<SymbolicValue>),
+}
+
+impl SymbolicValue {
+    fn into_bits(self) -> Result<SymbolicBits, XlsynthError> {
+        match self {
+            Self::Bits(bits) => Ok(bits),
+            Self::Tuple(_) => Err(symex_error("expected bits result, got tuple")),
+        }
+    }
+}
+
 impl Evaluator<'_> {
     fn evaluate_function(
         &self,
         function: &Fn,
-        arguments: Vec<SymbolicBits>,
-    ) -> Result<SymbolicBits, XlsynthError> {
+        arguments: Vec<SymbolicValue>,
+    ) -> Result<SymbolicValue, XlsynthError> {
         if arguments.len() != function.params.len() {
             return Err(symex_error(format!(
                 "function {} expects {} arguments, got {}",
@@ -112,55 +131,76 @@ impl Evaluator<'_> {
                     .ok_or_else(|| symex_error("parameter id is out of bounds"))?,
                 NodePayload::Literal(value) => {
                     let bit_count = bits_width(&node.ty)?;
-                    let value = value.to_u64().map_err(|error| {
-                        symex_error(format!(
-                            "unsupported literal at node {}: {error}",
-                            node.text_id
-                        ))
-                    })?;
-                    bits(bit_count, format!("(_ bv{value} {bit_count})"))?
+                    if bit_count == 0 {
+                        SymbolicValue::Bits(bits(0, String::new())?)
+                    } else {
+                        let value = value.to_u64().map_err(|error| {
+                            symex_error(format!(
+                                "unsupported literal at node {}: {error}",
+                                node.text_id
+                            ))
+                        })?;
+                        SymbolicValue::Bits(bits(bit_count, format!("(_ bv{value} {bit_count})"))?)
+                    }
                 }
+                NodePayload::Tuple(elements) => SymbolicValue::Tuple(
+                    elements
+                        .iter()
+                        .map(|element| get_value(&values, *element).cloned())
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                NodePayload::TupleIndex { tuple, index } => match get_value(&values, *tuple)? {
+                    SymbolicValue::Tuple(elements) => {
+                        elements.get(*index).cloned().ok_or_else(|| {
+                            symex_error(format!("tuple index {index} is out of bounds"))
+                        })?
+                    }
+                    SymbolicValue::Bits(_) => {
+                        return Err(symex_error("tuple_index operand is bits-typed"));
+                    }
+                },
                 NodePayload::Binop(op, lhs, rhs) => {
-                    let lhs = get_value(&values, *lhs)?;
-                    let rhs = get_value(&values, *rhs)?;
-                    evaluate_binop(*op, lhs, rhs, bits_width(&node.ty)?)?
+                    let lhs = get_bits(&values, *lhs)?;
+                    let rhs = get_bits(&values, *rhs)?;
+                    SymbolicValue::Bits(evaluate_binop(*op, lhs, rhs, bits_width(&node.ty)?)?)
                 }
-                NodePayload::Unop(op, arg) => {
-                    evaluate_unop(*op, get_value(&values, *arg)?, bits_width(&node.ty)?)?
-                }
+                NodePayload::Unop(op, arg) => SymbolicValue::Bits(evaluate_unop(
+                    *op,
+                    get_bits(&values, *arg)?,
+                    bits_width(&node.ty)?,
+                )?),
                 NodePayload::Nary(op, operands) => {
                     let operands = operands
                         .iter()
-                        .map(|operand| get_value(&values, *operand))
+                        .map(|operand| get_bits(&values, *operand))
                         .collect::<Result<Vec<_>, _>>()?;
-                    evaluate_nary(*op, &operands, bits_width(&node.ty)?)?
+                    SymbolicValue::Bits(evaluate_nary(*op, &operands, bits_width(&node.ty)?)?)
                 }
                 NodePayload::ZeroExt { arg, new_bit_count } => {
-                    let arg = get_value(&values, *arg)?;
-                    extend("zero_extend", arg, *new_bit_count)?
+                    let arg = get_bits(&values, *arg)?;
+                    SymbolicValue::Bits(extend("zero_extend", arg, *new_bit_count)?)
                 }
                 NodePayload::SignExt { arg, new_bit_count } => {
-                    let arg = get_value(&values, *arg)?;
-                    extend("sign_extend", arg, *new_bit_count)?
+                    let arg = get_bits(&values, *arg)?;
+                    SymbolicValue::Bits(extend("sign_extend", arg, *new_bit_count)?)
                 }
                 NodePayload::BitSlice { arg, start, width } => {
-                    let arg = get_value(&values, *arg)?;
-                    if *width == 0 {
-                        return Err(symex_error("zero-width bit slices are not yet supported"));
-                    }
-                    bits(
-                        *width,
+                    let arg = get_bits(&values, *arg)?;
+                    let expression = if *width == 0 {
+                        String::new()
+                    } else {
                         format!(
                             "((_ extract {} {}) {})",
                             start + width - 1,
                             start,
                             arg.expression
-                        ),
-                    )?
+                        )
+                    };
+                    SymbolicValue::Bits(bits(*width, expression)?)
                 }
                 NodePayload::DynamicBitSlice { arg, start, width } => {
-                    let arg = get_value(&values, *arg)?;
-                    let start = resize_unsigned(get_value(&values, *start)?, arg.bit_count)?;
+                    let arg = get_bits(&values, *arg)?;
+                    let start = resize_unsigned(get_bits(&values, *start)?, arg.bit_count)?;
                     if *width == 0 || *width > arg.bit_count {
                         return Err(symex_error(format!(
                             "unsupported dynamic bit-slice width {width} for bits[{}]",
@@ -173,20 +213,25 @@ impl Evaluator<'_> {
                     } else {
                         format!("((_ extract {} 0) {shifted})", width - 1)
                     };
-                    bits(*width, expression)?
+                    SymbolicValue::Bits(bits(*width, expression)?)
                 }
                 NodePayload::Sel {
                     selector,
                     cases,
                     default,
                 } => {
-                    let selector = get_value(&values, *selector)?;
+                    let selector = get_bits(&values, *selector)?;
                     let cases = cases
                         .iter()
-                        .map(|case| get_value(&values, *case))
+                        .map(|case| get_bits(&values, *case))
                         .collect::<Result<Vec<_>, _>>()?;
-                    let default = default.map(|value| get_value(&values, value)).transpose()?;
-                    evaluate_sel(selector, &cases, default, bits_width(&node.ty)?)?
+                    let default = default.map(|value| get_bits(&values, value)).transpose()?;
+                    SymbolicValue::Bits(evaluate_sel(
+                        selector,
+                        &cases,
+                        default,
+                        bits_width(&node.ty)?,
+                    )?)
                 }
                 NodePayload::Invoke { to_apply, operands } => {
                     let callee = self.package.get_fn(to_apply).ok_or_else(|| {
@@ -226,7 +271,16 @@ fn evaluate_binop(
     let expression = match op {
         Binop::Add => binary("bvadd", lhs, rhs)?,
         Binop::Sub => binary("bvsub", lhs, rhs)?,
-        Binop::Umul | Binop::Smul => binary("bvmul", lhs, rhs)?,
+        Binop::Umul => {
+            let lhs = resize_unsigned(lhs, result_width)?;
+            let rhs = resize_unsigned(rhs, result_width)?;
+            binary("bvmul", &lhs, &rhs)?
+        }
+        Binop::Smul => {
+            let lhs = resize_signed(lhs, result_width)?;
+            let rhs = resize_signed(rhs, result_width)?;
+            binary("bvmul", &lhs, &rhs)?
+        }
         Binop::Eq => comparison("=", lhs, rhs)?,
         Binop::Ne => comparison("distinct", lhs, rhs)?,
         Binop::Uge => comparison("bvuge", lhs, rhs)?,
@@ -250,11 +304,46 @@ fn evaluate_unop(
     arg: &SymbolicBits,
     result_width: usize,
 ) -> Result<SymbolicBits, XlsynthError> {
+    if arg.bit_count == 0 {
+        let expression = match op {
+            Unop::OrReduce | Unop::XorReduce => "#b0".to_owned(),
+            Unop::AndReduce => "#b1".to_owned(),
+            Unop::Identity | Unop::Neg | Unop::Not | Unop::Reverse => String::new(),
+        };
+        return bits(result_width, expression);
+    }
     let expression = match op {
         Unop::Identity => arg.expression.clone(),
         Unop::Neg => format!("(bvneg {})", arg.expression),
         Unop::Not => format!("(bvnot {})", arg.expression),
-        _ => return Err(symex_error(format!("unsupported unary operation {op:?}"))),
+        Unop::OrReduce => format!(
+            "(ite (= {} (_ bv0 {})) #b0 #b1)",
+            arg.expression, arg.bit_count
+        ),
+        Unop::AndReduce => format!(
+            "(ite (= {} (bvnot (_ bv0 {}))) #b1 #b0)",
+            arg.expression, arg.bit_count
+        ),
+        Unop::XorReduce => {
+            let mut expression = format!("((_ extract 0 0) {})", arg.expression);
+            for index in 1..arg.bit_count {
+                expression = format!(
+                    "(bvxor {expression} ((_ extract {index} {index}) {}))",
+                    arg.expression
+                );
+            }
+            expression
+        }
+        Unop::Reverse => {
+            let mut expression = format!("((_ extract 0 0) {})", arg.expression);
+            for index in 1..arg.bit_count {
+                expression = format!(
+                    "(concat {expression} ((_ extract {index} {index}) {}))",
+                    arg.expression
+                );
+            }
+            expression
+        }
     };
     bits(result_width, expression)
 }
@@ -264,6 +353,18 @@ fn evaluate_nary(
     operands: &[&SymbolicBits],
     result_width: usize,
 ) -> Result<SymbolicBits, XlsynthError> {
+    if result_width == 0 {
+        return bits(0, String::new());
+    }
+    let operands = if op == NaryOp::Concat {
+        operands
+            .iter()
+            .copied()
+            .filter(|operand| operand.bit_count > 0)
+            .collect::<Vec<_>>()
+    } else {
+        operands.to_vec()
+    };
     if operands.is_empty() {
         return Err(symex_error("empty n-ary operation is unsupported"));
     }
@@ -296,6 +397,9 @@ fn evaluate_sel(
     default: Option<&SymbolicBits>,
     result_width: usize,
 ) -> Result<SymbolicBits, XlsynthError> {
+    if result_width == 0 {
+        return bits(0, String::new());
+    }
     if cases.is_empty() {
         return Err(symex_error("select has no cases"));
     }
@@ -327,7 +431,11 @@ fn extend(
         return Err(symex_error("extension cannot narrow its operand"));
     }
     let amount = new_bit_count - arg.bit_count;
-    let expression = if amount == 0 {
+    let expression = if new_bit_count == 0 {
+        String::new()
+    } else if arg.bit_count == 0 {
+        format!("(_ bv0 {new_bit_count})")
+    } else if amount == 0 {
         arg.expression.clone()
     } else {
         format!("((_ {operation} {amount}) {})", arg.expression)
@@ -376,6 +484,19 @@ fn resize_unsigned(value: &SymbolicBits, width: usize) -> Result<SymbolicBits, X
     )
 }
 
+fn resize_signed(value: &SymbolicBits, width: usize) -> Result<SymbolicBits, XlsynthError> {
+    if value.bit_count == width {
+        return Ok(value.clone());
+    }
+    if value.bit_count < width {
+        return extend("sign_extend", value, width);
+    }
+    bits(
+        width,
+        format!("((_ extract {} 0) {})", width - 1, value.expression),
+    )
+}
+
 fn equal_widths(lhs: &SymbolicBits, rhs: &SymbolicBits) -> Result<(), XlsynthError> {
     if lhs.bit_count == rhs.bit_count {
         Ok(())
@@ -388,9 +509,9 @@ fn equal_widths(lhs: &SymbolicBits, rhs: &SymbolicBits) -> Result<(), XlsynthErr
 }
 
 fn get_value(
-    values: &[Option<SymbolicBits>],
+    values: &[Option<SymbolicValue>],
     node_ref: NodeRef,
-) -> Result<&SymbolicBits, XlsynthError> {
+) -> Result<&SymbolicValue, XlsynthError> {
     values
         .get(node_ref.index)
         .and_then(Option::as_ref)
@@ -402,20 +523,29 @@ fn get_value(
         })
 }
 
-fn bits(bit_count: usize, expression: String) -> Result<SymbolicBits, XlsynthError> {
-    if bit_count == 0 {
-        Err(symex_error("zero-width bits are not yet supported"))
-    } else {
-        Ok(SymbolicBits {
-            bit_count,
-            expression,
-        })
+fn get_bits(
+    values: &[Option<SymbolicValue>],
+    node_ref: NodeRef,
+) -> Result<&SymbolicBits, XlsynthError> {
+    match get_value(values, node_ref)? {
+        SymbolicValue::Bits(bits) => Ok(bits),
+        SymbolicValue::Tuple(_) => Err(symex_error(format!(
+            "operand node {} is tuple-typed, expected bits",
+            node_ref.index
+        ))),
     }
+}
+
+fn bits(bit_count: usize, expression: String) -> Result<SymbolicBits, XlsynthError> {
+    Ok(SymbolicBits {
+        bit_count,
+        expression,
+    })
 }
 
 fn bits_width(ty: &Type) -> Result<usize, XlsynthError> {
     match ty {
-        Type::Bits(bit_count) if *bit_count > 0 => Ok(*bit_count),
+        Type::Bits(bit_count) => Ok(*bit_count),
         _ => Err(symex_error(format!(
             "unsupported symbolic value type: {ty}"
         ))),
