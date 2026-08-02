@@ -38,7 +38,7 @@ docker_args=(
   --volume "${repo_dir}:/workspace/xlsynth-symex"
   --workdir /workspace/xlsynth-symex
   --env HOME=/tmp/xlsynth-symex-home
-  --env CARGO_HOME=/tmp/xlsynth-symex-home/.cargo
+  --env CARGO_HOME=/workspace/xlsynth-symex/.cache/cargo
   --env CARGO_TARGET_DIR=/workspace/xlsynth-symex/target
   --user "$(id -u):$(id -g)"
 )
