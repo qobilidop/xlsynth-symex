@@ -38,17 +38,16 @@ on pull requests and publishes it after relevant changes land on `main`.
 
 ## Current implementation
 
-The first symbolic-evaluation milestone is a deliberately minimal vertical
-slice. `xlsynth_symex::evaluate` returns one unconditional path and delegates
-the merged SMT-LIB result to XLS's Z3 translator. Tests compare this adapter
-with the upstream SMT output and run deterministic generated IR programs
-against both Z3 and the XLS interpreter. An offline curated corpus also compiles
-pinned upstream XLS examples and checks selected pure functions in optimized
-and unoptimized forms. See `tests/corpus/curated/README.md` for its provenance
-and extension workflow. The corpus uses curated-vector differential testing and
-deterministic differential fuzz testing today, while explicitly tracking the
-native-evaluator prerequisites for symbolic equivalence checking and
-path-witness replay.
+The current native bits evaluator traverses XLS IR through `xlsynth-pir` and
+constructs independent SMT bit-vector expressions for core arithmetic,
+Boolean, comparison, extension, selection, invocation, and slicing operations.
+Tests run deterministic generated IR programs against Z3 and the XLS
+interpreter. An offline curated corpus also compiles pinned upstream XLS
+examples and checks selected pure functions in optimized and unoptimized forms.
+See `tests/corpus/curated/README.md` for its provenance and extension workflow.
+The corpus requires curated-vector differential testing, deterministic
+differential fuzz testing, and independent symbolic equivalence checking;
+path-witness replay remains explicitly blocked on selection traces.
 
 See:
 

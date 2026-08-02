@@ -11,13 +11,12 @@ use xlsynth::{
     DslxConvertOptions, IrFunction, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name,
     optimize_ir,
 };
-use xlsynth_symex::evaluate;
+use xlsynth_symex::{SymexResult, evaluate_package};
 
 const MANIFEST: &str = include_str!("corpus/curated/manifest.tsv");
 const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
-const SYMBOLIC_EQUIVALENCE_BLOCKER: &str = "blocked:native-symbolic-evaluator";
 const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
 
 type BitsInput = Vec<(usize, u64)>;
@@ -266,7 +265,7 @@ fn assert_differential_samples(
     ir_form: IrForm,
     mode: DifferentialMode,
     function: &IrFunction,
-    function_name: &str,
+    symbolic: &SymexResult,
     samples: &[BitsInput],
 ) {
     assert!(
@@ -275,15 +274,6 @@ fn assert_differential_samples(
         entry.id,
         mode.name()
     );
-    let symbolic = evaluate(function).unwrap_or_else(|error| {
-        panic!(
-            "{} ({}): symbolic evaluation failed during {} testing: {error}",
-            entry.id,
-            ir_form.name(),
-            mode.name()
-        )
-    });
-
     let mut mismatches = Vec::with_capacity(samples.len());
     for (case, sample) in samples.iter().enumerate() {
         let args: Vec<_> = sample
@@ -307,18 +297,25 @@ fn assert_differential_samples(
                 mode.name()
             )
         });
-        let arguments = sample
+        assert_eq!(symbolic.parameters.len(), sample.len());
+        let bindings = symbolic
+            .parameters
             .iter()
-            .map(|(width, value)| format!(" (_ bv{value} {width})"))
-            .collect::<String>();
+            .zip(sample)
+            .map(|(parameter, (width, value))| {
+                assert_eq!(parameter.bit_count, *width);
+                format!("({} (_ bv{value} {width}))", parameter.name)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         mismatches.push(format!(
-            "(not (= (select {function_name}{arguments}) (_ bv{expected} {expected_width})))"
+            "(let ({bindings}) (not (= {} (_ bv{expected} {expected_width}))))",
+            symbolic.result.expression
         ));
     }
 
     let query = format!(
-        "{}\n(assert (or\n  {}))\n(check-sat)\n",
-        symbolic.result_smtlib,
+        "(assert (or\n  {}))\n(check-sat)\n",
         mismatches.join("\n  ")
     );
     let mut child = Command::new("z3")
@@ -377,9 +374,71 @@ fn run_differential_validation(mode: DifferentialMode) {
                         ir_form.name()
                     )
                 });
-            assert_differential_samples(&entry, ir_form, mode, &function, &function_name, &samples);
+            let symbolic = evaluate_package(package, &function_name).unwrap_or_else(|error| {
+                panic!(
+                    "{} ({}): symbolic evaluation failed during {} testing: {error}",
+                    entry.id,
+                    ir_form.name(),
+                    mode.name()
+                )
+            });
+            assert_differential_samples(&entry, ir_form, mode, &function, &symbolic, &samples);
         }
     }
+}
+
+fn assert_symbolic_equivalence(
+    entry: &ManifestEntry,
+    ir_form: IrForm,
+    function: &IrFunction,
+    symbolic: &SymexResult,
+    function_name: &str,
+) {
+    let reference = function.to_z3_smtlib().unwrap_or_else(|error| {
+        panic!(
+            "{} ({}): XLS reference SMT translation failed: {error}",
+            entry.id,
+            ir_form.name()
+        )
+    });
+    let arguments = symbolic
+        .parameters
+        .iter()
+        .map(|parameter| format!(" {}", parameter.name))
+        .collect::<String>();
+    let query = format!(
+        "{}\n{reference}\n(assert (not (= xlsynth_symex_result (select {function_name}{arguments}))))\n(check-sat)\n",
+        symbolic.result_smtlib
+    );
+    let mut child = Command::new("z3")
+        .arg("-in")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("z3 must be present in the development image");
+    child
+        .stdin
+        .take()
+        .expect("z3 stdin must be piped")
+        .write_all(query.as_bytes())
+        .expect("equivalence query must be writable");
+    let output = child.wait_with_output().expect("z3 must finish");
+    assert!(
+        output.status.success(),
+        "{} ({}) symbolic equivalence solver failed\nstdout: {}\nstderr: {}\nquery:\n{query}",
+        entry.id,
+        ir_form.name(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "unsat",
+        "{} ({}) native result is not symbolically equivalent to XLS\nquery:\n{query}",
+        entry.id,
+        ir_form.name(),
+    );
 }
 
 #[test]
@@ -442,6 +501,7 @@ fn curated_manifest_and_validation_matrix_are_complete() {
         );
         assert_eq!(validation.curated_vector_differential, "required");
         assert_eq!(validation.differential_fuzz, "required");
+        assert_eq!(validation.symbolic_equivalence, "required");
     }
     for id in ids {
         for ir_form in IrForm::ALL {
@@ -466,15 +526,23 @@ fn differential_fuzz_testing() {
 }
 
 #[test]
-fn symbolic_equivalence_checking_is_capability_gated() {
-    for validation in validation_entries() {
-        assert_eq!(
-            validation.symbolic_equivalence,
-            SYMBOLIC_EQUIVALENCE_BLOCKER,
-            "{} {} symbolic equivalence status",
-            validation.id,
-            validation.ir_form.name()
-        );
+fn symbolic_equivalence_checking() {
+    for entry in manifest_entries() {
+        let (unoptimized, optimized, function_name) = compile_entry(&entry);
+        for (ir_form, package) in [
+            (IrForm::Unoptimized, &unoptimized),
+            (IrForm::Optimized, &optimized),
+        ] {
+            let function = package.get_function(&function_name).unwrap();
+            let symbolic = evaluate_package(package, &function_name).unwrap_or_else(|error| {
+                panic!(
+                    "{} ({}): native symbolic evaluation failed: {error}",
+                    entry.id,
+                    ir_form.name()
+                )
+            });
+            assert_symbolic_equivalence(&entry, ir_form, &function, &symbolic, &function_name);
+        }
     }
 }
 

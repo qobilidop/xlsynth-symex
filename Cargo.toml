@@ -10,6 +10,7 @@ repository = "https://github.com/qobilidop/xlsynth-symex"
 
 [dependencies]
 xlsynth = { git = "https://github.com/xlsynth/xlsynth-crate", rev = "92bc9b932981c776bb4bb197cd6b6726f17ec090" }
+xlsynth-pir = { git = "https://github.com/xlsynth/xlsynth-crate", rev = "92bc9b932981c776bb4bb197cd6b6726f17ec090" }
 
 [lints.rust]
 missing_docs = "warn"

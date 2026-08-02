@@ -6,17 +6,24 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use xlsynth::{IrPackage, IrValue};
-use xlsynth_symex::evaluate;
+use xlsynth_symex::{SymexResult, evaluate};
 
-fn assert_smt_result(function_name: &str, smtlib: &str, width: usize, args: &[u64], expected: u64) {
-    let mut application = format!("(select {function_name}");
-    for arg in args {
-        application.push_str(&format!(" (_ bv{arg} {width})"));
-    }
-    application.push(')');
+fn assert_smt_result(result: &SymexResult, width: usize, args: &[u64], expected: u64) {
+    assert_eq!(result.parameters.len(), args.len());
+    let bindings = result
+        .parameters
+        .iter()
+        .zip(args)
+        .map(|(parameter, value)| {
+            assert_eq!(parameter.bit_count, width);
+            format!("({} (_ bv{value} {width}))", parameter.name)
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
 
     let query = format!(
-        "{smtlib}\n(assert (not (= {application} (_ bv{expected} {width}))))\n(check-sat)\n"
+        "(assert (let ({bindings}) (not (= {} (_ bv{expected} {width})))))\n(check-sat)\n",
+        result.result.expression
     );
     let mut child = Command::new("z3")
         .arg("-in")
@@ -63,7 +70,7 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
             IrValue::make_ubits(8, y).unwrap(),
         ];
         let expected = function.interpret(&args).unwrap().to_u64().unwrap();
-        assert_smt_result("add", &result.result_smtlib, 8, &[x, y], expected);
+        assert_smt_result(&result, 8, &[x, y], expected);
     }
 }
 
@@ -167,6 +174,6 @@ fn deterministic_ir_fuzz_matches_interpreter() {
         let expected = function.interpret(&args).unwrap().to_u64().unwrap();
         let result = evaluate(&function).unwrap();
 
-        assert_smt_result("fuzz", &result.result_smtlib, width, &[x, y], expected);
+        assert_smt_result(&result, width, &[x, y], expected);
     }
 }
