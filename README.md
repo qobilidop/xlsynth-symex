@@ -23,6 +23,7 @@ Run development commands in the Ubuntu-based development container:
 ```text
 ./dev.sh cargo test --workspace
 ./dev.sh cargo fmt --all -- --check
+./dev.sh cargo clippy --all-targets -- -D warnings
 ./dev.sh
 ```
 
@@ -34,6 +35,14 @@ Set `XLSYNTH_SYMEX_DEV_IMAGE` to select another registry or immutable SHA tag.
 Editors supporting the Development Containers specification can use
 `.devcontainer/devcontainer.json` directly. GitHub Actions validates the image
 on pull requests and publishes it after relevant changes land on `main`.
+
+## Current implementation
+
+The first symbolic-evaluation milestone is a deliberately minimal vertical
+slice. `xlsynth_symex::evaluate` returns one unconditional path and delegates
+the merged SMT-LIB result to XLS's Z3 translator. Tests compare this adapter
+with the upstream SMT output and run deterministic generated IR programs
+against both Z3 and the XLS interpreter.
 
 See:
 

@@ -105,6 +105,24 @@ rather than assumed.
 The symbolic value and evaluator layers should not expose processor or
 instruction concepts. A state transition is simply one possible XLS function.
 
+## Initial vertical slice
+
+The first implemented evaluator is intentionally an adapter over
+`xlsynth::IrFunction::to_z3_smtlib`. It returns one result whose path condition
+is `true` and whose merged result is the complete upstream-generated SMT-LIB
+encoding. This establishes the public result shape, XLS integration, solver
+invocation, and differential-testing loop before native symbolic evaluation is
+introduced.
+
+The adapter is checked directly against the upstream SMT translation. Its
+semantic validation uses bits-only generated pure functions: concrete inputs
+are evaluated with the XLS interpreter, the same inputs and expected result are
+asserted against the SMT encoding, and Z3 must report the negated equality as
+unsatisfiable. Generation is deterministic from a fixed seed so failures can
+be reproduced exactly. This validation does not provide an independent check
+of XLS's own SMT translator; it verifies the adapter and compares that
+translator against the independently implemented XLS interpreter.
+
 ## Symbolic domain
 
 The first implementation should distinguish fully concrete and symbolic

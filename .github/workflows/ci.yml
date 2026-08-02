@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  XLSYNTH_SYMEX_DEV_IMAGE: xlsynth-symex-dev:ci
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build development image
+        run: ./dev.sh --build
+
+      - name: Check formatting
+        run: ./dev.sh cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: ./dev.sh cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        run: ./dev.sh cargo test --all-targets
