@@ -588,6 +588,10 @@ fn curated_manifest_and_validation_matrix_are_complete() {
     assert_eq!(validations.len(), entries.len() * IrForm::ALL.len());
     let mut validation_keys = BTreeSet::new();
     for validation in validations {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == validation.id)
+            .unwrap();
         assert!(
             ids.contains(validation.id),
             "unknown validation id: {}",
@@ -599,12 +603,18 @@ fn curated_manifest_and_validation_matrix_are_complete() {
             validation.id,
             validation.ir_form.name()
         );
-        assert_eq!(validation.curated_vector_differential, "required");
-        assert_eq!(validation.differential_fuzz, "required");
+        assert_eq!(
+            validation.curated_vector_differential,
+            format!("pass:{}", entry.curated_vectors().len())
+        );
+        assert_eq!(
+            validation.differential_fuzz,
+            format!("pass:{}", entry.fuzz_cases)
+        );
         assert!(
             matches!(
                 validation.symbolic_equivalence,
-                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER
+                "unsat" | XLS_REFERENCE_TRANSLATOR_BLOCKER
             ),
             "{} {} invalid symbolic equivalence status: {}",
             validation.id,
@@ -652,7 +662,7 @@ fn symbolic_equivalence_checking() {
             ) {
                 continue;
             }
-            assert_eq!(validation.symbolic_equivalence, "required");
+            assert_eq!(validation.symbolic_equivalence, "unsat");
             let function = package.get_function(&function_name).unwrap();
             let symbolic = evaluate_package(package, &function_name).unwrap_or_else(|error| {
                 panic!(

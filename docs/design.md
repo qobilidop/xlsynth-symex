@@ -400,9 +400,13 @@ the bundled DSLX standard library and exercises the selected pure function in
 both unoptimized and optimized IR forms. Deterministic concrete samples are
 evaluated by the XLS interpreter and asserted against the symbolic SMT result.
 Stable per-entry seeds and case budgets drive differential fuzz testing; the
-small `tiny_adder` domain is exhausted. A separate validation matrix records
-requirements and capability blockers for all four validation modes per IR
-form.
+small `tiny_adder` domain is exhausted. `validation.tsv` is the checked-in
+outcome report for all four validation modes and both IR forms: differential
+cells record `pass:<case-count>`, successful equivalence cells record `unsat`,
+and unavailable checks retain a named `blocked:<capability>` status. Tests
+cross-check its counts against the manifest and curated vectors and rerun every
+reported passing validation, preventing the table from silently drifting from
+the executable corpus.
 
 The curated slice currently covers widened addition (`tiny_adder`), nested
 selection (`nested_sel`), the opcode decoder from `riscv_simple`, and tuple- and
