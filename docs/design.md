@@ -105,14 +105,17 @@ type coverage must still be measured rather than assumed.
 The symbolic value and evaluator layers should not expose processor or
 instruction concepts. A state transition is simply one possible XLS function.
 
-## Current native bits slice
+## Current native evaluator slice
 
 The evaluator parses XLS IR with `xlsynth-pir` and constructs its own typed
 SMT-LIB bit-vector expressions. The current slice returns one merged result
-whose path condition is `true`. It supports bits parameters and results, core
+whose path condition is `true`. It supports bits, tuple, and fixed-size array
+parameters and results. Structured values are represented recursively and bits
+leaves become independent SMT parameters. The operation slice includes core
 arithmetic and Boolean operations, reductions, comparisons, extensions, static
 and dynamic slices, merged selects, structural tuple construction and indexing,
-and recursive calls to pure functions in the package. Zero-width bits are
+array construction, symbolic one-dimensional indexing and update, `one_hot`,
+`encode`, and recursive calls to pure functions in the package. Zero-width bits are
 carried structurally with no SMT term and disappear through operations such as
 concatenation and extension. `counted_for` loops with static trip counts are
 evaluated by repeatedly applying their pure body function to a symbolic carry.
@@ -405,18 +408,21 @@ The curated slice currently covers widened addition (`tiny_adder`), nested
 selection (`nested_sel`), the opcode decoder from `riscv_simple`, and tuple- and
 multiplication-heavy overflow detection (`overflow_detect`). An eight-bit LFSR
 adds bounded loops, dynamic slicing, concatenation, and XOR-heavy logic. Corpus
-cases gate only when both IR forms are supported. Examples whose unoptimized IR
-contains operations rejected by the current XLS SMT translator, such as
-`counted_for`, should be added later with an explicit capability-status model
-rather than silently skipping a validation mode.
+function `find_index` adds structured array inputs and tuple results, symbolic
+array indexing and update, and priority encoding. Required differential checks
+gate independently for both IR forms; unsupported validation combinations carry
+an explicit capability status rather than being silently skipped.
 
 Symbolic equivalence is required for every currently supported curated function
 and IR form where XLS's reference translator can produce a query. A known XLS
 translator abort on the zero-width-heavy unoptimized overflow example is
 recorded as an explicit reference-side blocker; the optimized form proves
-equivalent. Until explicit path enumeration and canonical selection traces
-exist, path-witness replay remains blocked. The corpus matrix records these
-limitations explicitly.
+equivalent. The XLS reference translator and the native evaluator do not yet
+share a reconstruction convention for flattened structured parameters and
+results, so symbolic equivalence for `find_index` is explicitly blocked at that
+interface while both differential modes remain required. Until explicit path
+enumeration and canonical selection traces exist, path-witness replay remains
+blocked. The corpus matrix records these limitations explicitly.
 
 Useful measurements include operation and type coverage, expression DAG size,
 paths and choice outcomes, concretely pruned selects, visited IR nodes,

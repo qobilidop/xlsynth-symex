@@ -45,6 +45,40 @@ pub struct SymbolicBits {
     pub expression: String,
 }
 
+/// A structural symbolic XLS value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SymbolicValue {
+    /// A bit-vector leaf.
+    Bits(SymbolicBits),
+    /// A tuple whose elements retain XLS tuple order.
+    Tuple(Vec<SymbolicValue>),
+    /// A fixed-size array whose elements retain XLS array order.
+    Array(Vec<SymbolicValue>),
+}
+
+impl SymbolicValue {
+    /// Returns this value as bits, or `None` for a structural value.
+    #[must_use]
+    pub const fn as_bits(&self) -> Option<&SymbolicBits> {
+        match self {
+            Self::Bits(bits) => Some(bits),
+            Self::Tuple(_) | Self::Array(_) => None,
+        }
+    }
+
+    /// Appends all bits leaves in structural order.
+    pub fn flatten_bits<'a>(&'a self, output: &mut Vec<&'a SymbolicBits>) {
+        match self {
+            Self::Bits(bits) => output.push(bits),
+            Self::Tuple(elements) | Self::Array(elements) => {
+                for element in elements {
+                    element.flatten_bits(output);
+                }
+            }
+        }
+    }
+}
+
 /// The merged symbolic result of evaluating one XLS function.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SymexResult {
@@ -53,7 +87,7 @@ pub struct SymexResult {
     /// Symbolic parameters in function-signature order.
     pub parameters: Vec<SymbolicParameter>,
     /// Native symbolic result expression.
-    pub result: SymbolicBits,
+    pub result: SymbolicValue,
     /// Self-contained SMT-LIB declarations for the parameters and result.
     pub result_smtlib: String,
 }
@@ -109,8 +143,9 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
                 },
             ]
         );
-        assert_eq!(result.result.bit_count, 8);
-        assert_eq!(result.result.expression, "(bvadd symex_arg_0 symex_arg_1)");
+        let result_bits = result.result.as_bits().unwrap();
+        assert_eq!(result_bits.bit_count, 8);
+        assert_eq!(result_bits.expression, "(bvadd symex_arg_0 symex_arg_1)");
         assert_ne!(result.result_smtlib, function.to_z3_smtlib().unwrap());
     }
 }

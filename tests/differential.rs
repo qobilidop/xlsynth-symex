@@ -23,7 +23,7 @@ fn assert_smt_result(result: &SymexResult, width: usize, args: &[u64], expected:
 
     let query = format!(
         "(assert (let ({bindings}) (not (= {} (_ bv{expected} {width})))))\n(check-sat)\n",
-        result.result.expression
+        result.result.as_bits().unwrap().expression
     );
     let mut child = Command::new("z3")
         .arg("-in")

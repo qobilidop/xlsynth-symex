@@ -18,6 +18,7 @@ const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
 const XLS_REFERENCE_TRANSLATOR_BLOCKER: &str = "blocked:xls-reference-translator";
+const STRUCTURED_INTERFACE_BLOCKER: &str = "blocked:structured-symbolic-interface";
 const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
 
 type BitsInput = Vec<(usize, u64)>;
@@ -72,6 +73,7 @@ impl<'a> ManifestEntry<'a> {
             "riscv_simple.x" => include_str!("corpus/curated/riscv_simple.x"),
             "overflow_detect.x" => include_str!("corpus/curated/overflow_detect.x"),
             "lfsr.x" => include_str!("corpus/curated/lfsr.x"),
+            "find_index.x" => include_str!("corpus/curated/find_index.x"),
             fixture => panic!("manifest references unknown curated fixture: {fixture}"),
         }
     }
@@ -83,6 +85,7 @@ impl<'a> ManifestEntry<'a> {
             "riscv_decode_opcode" => &[32],
             "overflow_detect" => &[16, 16],
             "lfsr" => &[8],
+            "find_index" => &[4, 4, 4, 4, 4],
             id => panic!("manifest entry has no input shape: {id}"),
         }
     }
@@ -129,6 +132,13 @@ impl<'a> ManifestEntry<'a> {
                 vec![(8, 155)],
                 vec![(8, 237)],
                 vec![(8, 255)],
+            ],
+            "find_index" => vec![
+                vec![(4, 1), (4, 2), (4, 3), (4, 4), (4, 1)],
+                vec![(4, 1), (4, 2), (4, 3), (4, 4), (4, 3)],
+                vec![(4, 1), (4, 2), (4, 3), (4, 4), (4, 5)],
+                vec![(4, 7), (4, 7), (4, 7), (4, 7), (4, 7)],
+                vec![(4, 0), (4, 15), (4, 0), (4, 15), (4, 15)],
             ],
             id => panic!("manifest entry has no curated vectors: {id}"),
         }
@@ -280,6 +290,33 @@ fn compile_entry(entry: &ManifestEntry) -> (IrPackage, IrPackage, String) {
     (converted.ir, optimized, function_name)
 }
 
+fn make_ir_args(entry: &ManifestEntry, sample: &BitsInput) -> Vec<IrValue> {
+    if entry.id == "find_index" {
+        let elements = sample[..4]
+            .iter()
+            .map(|(width, value)| IrValue::make_ubits(*width, *value).unwrap())
+            .collect::<Vec<_>>();
+        return vec![
+            IrValue::make_array(&elements).unwrap(),
+            IrValue::make_ubits(sample[4].0, sample[4].1).unwrap(),
+        ];
+    }
+    sample
+        .iter()
+        .map(|(width, value)| IrValue::make_ubits(*width, *value).unwrap())
+        .collect()
+}
+
+fn flatten_ir_bits(value: &IrValue, output: &mut Vec<(usize, u64)>) {
+    if let Ok(elements) = value.get_elements() {
+        for element in elements {
+            flatten_ir_bits(&element, output);
+        }
+    } else {
+        output.push((value.bit_count().unwrap(), value.to_u64().unwrap()));
+    }
+}
+
 fn assert_differential_samples(
     entry: &ManifestEntry,
     ir_form: IrForm,
@@ -300,16 +337,22 @@ fn assert_differential_samples(
         .map(|parameter| format!("({} (_ BitVec {}))", parameter.name, parameter.bit_count))
         .collect::<Vec<_>>()
         .join(" ");
-    let candidate = format!(
-        "(define-fun xlsynth_symex_apply ({parameter_declarations}) (_ BitVec {}) {})\n",
-        symbolic.result.bit_count, symbolic.result.expression
-    );
+    let mut result_leaves = Vec::new();
+    symbolic.result.flatten_bits(&mut result_leaves);
+    let candidate = result_leaves
+        .iter()
+        .enumerate()
+        .filter(|(_, bits)| bits.bit_count > 0)
+        .map(|(index, bits)| {
+            format!(
+                "(define-fun xlsynth_symex_apply_{index} ({parameter_declarations}) (_ BitVec {}) {})\n",
+                bits.bit_count, bits.expression
+            )
+        })
+        .collect::<String>();
     let mut mismatches = Vec::with_capacity(samples.len());
     for (case, sample) in samples.iter().enumerate() {
-        let args: Vec<_> = sample
-            .iter()
-            .map(|(width, value)| IrValue::make_ubits(*width, *value).unwrap())
-            .collect();
+        let args = make_ir_args(entry, sample);
         let expected = function.interpret(&args).unwrap_or_else(|error| {
             panic!(
                 "{} ({}, {} case {case}): XLS interpreter failed for {sample:?}: {error}",
@@ -318,15 +361,9 @@ fn assert_differential_samples(
                 mode.name()
             )
         });
-        let expected_width = expected.bit_count().unwrap();
-        let expected = expected.to_u64().unwrap_or_else(|error| {
-            panic!(
-                "{} ({}, {} case {case}): result does not fit the bits-only harness: {error}",
-                entry.id,
-                ir_form.name(),
-                mode.name()
-            )
-        });
+        let mut expected_leaves = Vec::new();
+        flatten_ir_bits(&expected, &mut expected_leaves);
+        assert_eq!(result_leaves.len(), expected_leaves.len());
         assert_eq!(symbolic.parameters.len(), sample.len());
         let arguments = symbolic
             .parameters
@@ -337,9 +374,21 @@ fn assert_differential_samples(
                 format!(" (_ bv{value} {width})")
             })
             .collect::<String>();
-        mismatches.push(format!(
-            "(not (= (xlsynth_symex_apply{arguments}) (_ bv{expected} {expected_width})))"
-        ));
+        let leaf_mismatches = expected_leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, (width, _))| *width > 0)
+            .map(|(index, (width, expected))| {
+                format!(
+                    "(not (= (xlsynth_symex_apply_{index}{arguments}) (_ bv{expected} {width})))"
+                )
+            })
+            .collect::<Vec<_>>();
+        mismatches.push(if leaf_mismatches.len() == 1 {
+            leaf_mismatches[0].clone()
+        } else {
+            format!("(or {})", leaf_mismatches.join(" "))
+        });
     }
 
     let query = format!(
@@ -532,7 +581,7 @@ fn curated_manifest_and_validation_matrix_are_complete() {
         assert!(
             matches!(
                 validation.symbolic_equivalence,
-                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER
+                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER | STRUCTURED_INTERFACE_BLOCKER
             ),
             "{} {} invalid symbolic equivalence status: {}",
             validation.id,
@@ -574,7 +623,10 @@ fn symbolic_equivalence_checking() {
                 .into_iter()
                 .find(|validation| validation.id == entry.id && validation.ir_form == ir_form)
                 .unwrap();
-            if validation.symbolic_equivalence == XLS_REFERENCE_TRANSLATOR_BLOCKER {
+            if matches!(
+                validation.symbolic_equivalence,
+                XLS_REFERENCE_TRANSLATOR_BLOCKER | STRUCTURED_INTERFACE_BLOCKER
+            ) {
                 continue;
             }
             assert_eq!(validation.symbolic_equivalence, "required");

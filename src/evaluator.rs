@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use xlsynth::XlsynthError;
+use xlsynth::{IrValue, XlsynthError};
 use xlsynth_pir::ir::{Binop, Fn, NaryOp, NodePayload, NodeRef, Package, Type, Unop};
 use xlsynth_pir::ir_parser::Parser;
 
-use crate::{PathCondition, SymbolicBits, SymbolicParameter, SymexResult};
+use crate::{PathCondition, SymbolicBits, SymbolicParameter, SymbolicValue, SymexResult};
 
 pub(crate) fn evaluate_function_text(function_text: &str) -> Result<SymexResult, XlsynthError> {
     let package_text = format!("package standalone\n\n{function_text}");
@@ -33,33 +33,20 @@ fn evaluate_parsed(package: &Package, function_name: &str) -> Result<SymexResult
     let function = package
         .get_fn(function_name)
         .ok_or_else(|| symex_error(format!("function {function_name:?} is absent from package")))?;
-    let parameters = function
+    let mut parameters = Vec::new();
+    let arguments = function
         .params
         .iter()
         .enumerate()
-        .map(|(index, parameter)| match parameter.ty {
-            Type::Bits(bit_count) if bit_count > 0 => Ok(SymbolicParameter {
-                name: format!("symex_arg_{index}"),
-                bit_count,
-            }),
-            ref ty => Err(symex_error(format!(
-                "unsupported parameter type for {}: {ty}",
-                parameter.name
-            ))),
+        .map(|(index, parameter)| {
+            symbolic_input(
+                &parameter.ty,
+                &format!("symex_arg_{index}"),
+                &mut parameters,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let arguments = parameters
-        .iter()
-        .map(|parameter| {
-            SymbolicValue::Bits(SymbolicBits {
-                bit_count: parameter.bit_count,
-                expression: parameter.name.clone(),
-            })
-        })
-        .collect();
-    let result = Evaluator { package }
-        .evaluate_function(function, arguments)?
-        .into_bits()?;
+    let result = Evaluator { package }.evaluate_function(function, arguments)?;
     let mut result_smtlib = parameters
         .iter()
         .map(|parameter| {
@@ -69,10 +56,14 @@ fn evaluate_parsed(package: &Package, function_name: &str) -> Result<SymexResult
             )
         })
         .collect::<String>();
-    result_smtlib.push_str(&format!(
-        "(define-fun xlsynth_symex_result () (_ BitVec {}) {})\n",
-        result.bit_count, result.expression
-    ));
+    if let Some(bits) = result.as_bits()
+        && bits.bit_count > 0
+    {
+        result_smtlib.push_str(&format!(
+            "(define-fun xlsynth_symex_result () (_ BitVec {}) {})\n",
+            bits.bit_count, bits.expression
+        ));
+    }
     Ok(SymexResult {
         path_condition: PathCondition::True,
         parameters,
@@ -83,21 +74,6 @@ fn evaluate_parsed(package: &Package, function_name: &str) -> Result<SymexResult
 
 struct Evaluator<'a> {
     package: &'a Package,
-}
-
-#[derive(Clone, Debug)]
-enum SymbolicValue {
-    Bits(SymbolicBits),
-    Tuple(Vec<SymbolicValue>),
-}
-
-impl SymbolicValue {
-    fn into_bits(self) -> Result<SymbolicBits, XlsynthError> {
-        match self {
-            Self::Bits(bits) => Ok(bits),
-            Self::Tuple(_) => Err(symex_error("expected bits result, got tuple")),
-        }
-    }
 }
 
 impl Evaluator<'_> {
@@ -129,34 +105,78 @@ impl Evaluator<'_> {
                     )
                     .cloned()
                     .ok_or_else(|| symex_error("parameter id is out of bounds"))?,
-                NodePayload::Literal(value) => {
-                    let bit_count = bits_width(&node.ty)?;
-                    if bit_count == 0 {
-                        SymbolicValue::Bits(bits(0, String::new())?)
-                    } else {
-                        let value = value.to_u64().map_err(|error| {
-                            symex_error(format!(
-                                "unsupported literal at node {}: {error}",
-                                node.text_id
-                            ))
-                        })?;
-                        SymbolicValue::Bits(bits(bit_count, format!("(_ bv{value} {bit_count})"))?)
-                    }
-                }
+                NodePayload::Literal(value) => literal_value(&node.ty, value).map_err(|error| {
+                    symex_error(format!("literal at node {}: {error}", node.text_id))
+                })?,
                 NodePayload::Tuple(elements) => SymbolicValue::Tuple(
                     elements
                         .iter()
                         .map(|element| get_value(&values, *element).cloned())
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
+                NodePayload::Array(elements) => SymbolicValue::Array(
+                    elements
+                        .iter()
+                        .map(|element| get_value(&values, *element).cloned())
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                NodePayload::ArrayIndex { array, indices, .. } => {
+                    if indices.len() != 1 {
+                        return Err(symex_error("only one-dimensional array_index is supported"));
+                    }
+                    let selector = get_bits(&values, indices[0])?;
+                    match get_value(&values, *array)? {
+                        SymbolicValue::Array(elements) => {
+                            select_structural(selector, elements, None)?
+                        }
+                        _ => return Err(symex_error("array_index operand is not array-typed")),
+                    }
+                }
+                NodePayload::ArrayUpdate {
+                    array,
+                    value,
+                    indices,
+                    ..
+                } => {
+                    if indices.len() != 1 {
+                        return Err(symex_error(
+                            "only one-dimensional array_update is supported",
+                        ));
+                    }
+                    let selector = get_bits(&values, indices[0])?;
+                    let update_value = get_value(&values, *value)?;
+                    match get_value(&values, *array)? {
+                        SymbolicValue::Array(elements) => SymbolicValue::Array(
+                            elements
+                                .iter()
+                                .enumerate()
+                                .map(|(index, element)| {
+                                    let selected = bits(
+                                        1,
+                                        format!(
+                                            "(ite (= {} (_ bv{index} {})) #b1 #b0)",
+                                            selector.expression, selector.bit_count
+                                        ),
+                                    )?;
+                                    select_structural(
+                                        &selected,
+                                        &[element.clone(), update_value.clone()],
+                                        None,
+                                    )
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ),
+                        _ => return Err(symex_error("array_update operand is not array-typed")),
+                    }
+                }
                 NodePayload::TupleIndex { tuple, index } => match get_value(&values, *tuple)? {
                     SymbolicValue::Tuple(elements) => {
                         elements.get(*index).cloned().ok_or_else(|| {
                             symex_error(format!("tuple index {index} is out of bounds"))
                         })?
                     }
-                    SymbolicValue::Bits(_) => {
-                        return Err(symex_error("tuple_index operand is bits-typed"));
+                    SymbolicValue::Bits(_) | SymbolicValue::Array(_) => {
+                        return Err(symex_error("tuple_index operand is not tuple-typed"));
                     }
                 },
                 NodePayload::Binop(op, lhs, rhs) => {
@@ -215,6 +235,13 @@ impl Evaluator<'_> {
                     };
                     SymbolicValue::Bits(bits(*width, expression)?)
                 }
+                NodePayload::OneHot { arg, lsb_prio } => {
+                    SymbolicValue::Bits(evaluate_one_hot(get_bits(&values, *arg)?, *lsb_prio)?)
+                }
+                NodePayload::Encode { arg } => SymbolicValue::Bits(evaluate_encode(
+                    get_bits(&values, *arg)?,
+                    bits_width(&node.ty)?,
+                )?),
                 NodePayload::Sel {
                     selector,
                     cases,
@@ -223,15 +250,12 @@ impl Evaluator<'_> {
                     let selector = get_bits(&values, *selector)?;
                     let cases = cases
                         .iter()
-                        .map(|case| get_bits(&values, *case))
+                        .map(|case| get_value(&values, *case).cloned())
                         .collect::<Result<Vec<_>, _>>()?;
-                    let default = default.map(|value| get_bits(&values, value)).transpose()?;
-                    SymbolicValue::Bits(evaluate_sel(
-                        selector,
-                        &cases,
-                        default,
-                        bits_width(&node.ty)?,
-                    )?)
+                    let default = default
+                        .map(|value| get_value(&values, value).cloned())
+                        .transpose()?;
+                    select_structural(selector, &cases, default.as_ref())?
                 }
                 NodePayload::Invoke { to_apply, operands } => {
                     let callee = self.package.get_fn(to_apply).ok_or_else(|| {
@@ -295,6 +319,55 @@ impl Evaluator<'_> {
             .ok_or_else(|| symex_error(format!("function {} has no return node", function.name)))?;
         get_value(&values, ret).cloned()
     }
+}
+
+fn evaluate_one_hot(arg: &SymbolicBits, lsb_prio: bool) -> Result<SymbolicBits, XlsynthError> {
+    if arg.bit_count == 0 {
+        return Err(symex_error("one_hot requires a nonempty operand"));
+    }
+    let is_zero = format!(
+        "(ite (= {} (_ bv0 {})) #b1 #b0)",
+        arg.expression, arg.bit_count
+    );
+    let mut output_bits = Vec::with_capacity(arg.bit_count + 1);
+    for index in 0..arg.bit_count {
+        let higher_priority = if lsb_prio {
+            0..index
+        } else {
+            index + 1..arg.bit_count
+        };
+        let mut selected = format!("((_ extract {index} {index}) {})", arg.expression);
+        for prior in higher_priority {
+            selected = format!(
+                "(bvand {selected} (bvnot ((_ extract {prior} {prior}) {})))",
+                arg.expression
+            );
+        }
+        output_bits.push(selected);
+    }
+    output_bits.push(is_zero);
+    let expression = output_bits
+        .iter()
+        .rev()
+        .skip(1)
+        .fold(output_bits.last().unwrap().clone(), |acc, bit| {
+            format!("(concat {acc} {bit})")
+        });
+    bits(arg.bit_count + 1, expression)
+}
+
+fn evaluate_encode(arg: &SymbolicBits, result_width: usize) -> Result<SymbolicBits, XlsynthError> {
+    if result_width == 0 {
+        return bits(0, String::new());
+    }
+    let mut expression = format!("(_ bv0 {result_width})");
+    for index in 0..arg.bit_count {
+        expression = format!(
+            "(ite (= ((_ extract {index} {index}) {}) #b1) (bvor {expression} (_ bv{index} {result_width})) {expression})",
+            arg.expression
+        );
+    }
+    bits(result_width, expression)
 }
 
 fn evaluate_binop(
@@ -424,6 +497,90 @@ fn evaluate_nary(
             format!("({operator} {expression} {})", operand.expression)
         });
     bits(result_width, expression)
+}
+
+fn select_structural(
+    selector: &SymbolicBits,
+    cases: &[SymbolicValue],
+    default: Option<&SymbolicValue>,
+) -> Result<SymbolicValue, XlsynthError> {
+    let first = cases
+        .first()
+        .ok_or_else(|| symex_error("select has no cases"))?;
+    match first {
+        SymbolicValue::Bits(first_bits) => {
+            let case_bits = cases
+                .iter()
+                .map(|case| match case {
+                    SymbolicValue::Bits(bits) => Ok(bits),
+                    _ => Err(symex_error("select cases have different structures")),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let default_bits = match default {
+                Some(SymbolicValue::Bits(bits)) => Some(bits),
+                Some(_) => return Err(symex_error("select default has different structure")),
+                None => None,
+            };
+            Ok(SymbolicValue::Bits(evaluate_sel(
+                selector,
+                &case_bits,
+                default_bits,
+                first_bits.bit_count,
+            )?))
+        }
+        SymbolicValue::Tuple(first_elements) => {
+            let mut result = Vec::with_capacity(first_elements.len());
+            for index in 0..first_elements.len() {
+                let element_cases = cases
+                    .iter()
+                    .map(|case| match case {
+                        SymbolicValue::Tuple(elements) => elements
+                            .get(index)
+                            .cloned()
+                            .ok_or_else(|| symex_error("select tuple arity mismatch")),
+                        _ => Err(symex_error("select cases have different structures")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let default_element = match default {
+                    Some(SymbolicValue::Tuple(elements)) => elements.get(index),
+                    Some(_) => return Err(symex_error("select default has different structure")),
+                    None => None,
+                };
+                result.push(select_structural(
+                    selector,
+                    &element_cases,
+                    default_element,
+                )?);
+            }
+            Ok(SymbolicValue::Tuple(result))
+        }
+        SymbolicValue::Array(first_elements) => {
+            let mut result = Vec::with_capacity(first_elements.len());
+            for index in 0..first_elements.len() {
+                let element_cases = cases
+                    .iter()
+                    .map(|case| match case {
+                        SymbolicValue::Array(elements) => elements
+                            .get(index)
+                            .cloned()
+                            .ok_or_else(|| symex_error("select array length mismatch")),
+                        _ => Err(symex_error("select cases have different structures")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let default_element = match default {
+                    Some(SymbolicValue::Array(elements)) => elements.get(index),
+                    Some(_) => return Err(symex_error("select default has different structure")),
+                    None => None,
+                };
+                result.push(select_structural(
+                    selector,
+                    &element_cases,
+                    default_element,
+                )?);
+            }
+            Ok(SymbolicValue::Array(result))
+        }
+    }
 }
 
 fn evaluate_sel(
@@ -564,10 +721,83 @@ fn get_bits(
 ) -> Result<&SymbolicBits, XlsynthError> {
     match get_value(values, node_ref)? {
         SymbolicValue::Bits(bits) => Ok(bits),
-        SymbolicValue::Tuple(_) => Err(symex_error(format!(
-            "operand node {} is tuple-typed, expected bits",
+        SymbolicValue::Tuple(_) | SymbolicValue::Array(_) => Err(symex_error(format!(
+            "operand node {} is structured, expected bits",
             node_ref.index
         ))),
+    }
+}
+
+fn symbolic_input(
+    ty: &Type,
+    name: &str,
+    parameters: &mut Vec<SymbolicParameter>,
+) -> Result<SymbolicValue, XlsynthError> {
+    match ty {
+        Type::Bits(0) => Ok(SymbolicValue::Bits(bits(0, String::new())?)),
+        Type::Bits(bit_count) => {
+            parameters.push(SymbolicParameter {
+                name: name.to_owned(),
+                bit_count: *bit_count,
+            });
+            Ok(SymbolicValue::Bits(bits(*bit_count, name.to_owned())?))
+        }
+        Type::Tuple(element_types) => Ok(SymbolicValue::Tuple(
+            element_types
+                .iter()
+                .enumerate()
+                .map(|(index, element_type)| {
+                    symbolic_input(element_type, &format!("{name}_{index}"), parameters)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Type::Array(array) => Ok(SymbolicValue::Array(
+            (0..array.element_count)
+                .map(|index| {
+                    symbolic_input(&array.element_type, &format!("{name}_{index}"), parameters)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Type::Token => Err(symex_error("token parameters are not supported")),
+    }
+}
+
+fn literal_value(ty: &Type, value: &IrValue) -> Result<SymbolicValue, XlsynthError> {
+    match ty {
+        Type::Bits(0) => Ok(SymbolicValue::Bits(bits(0, String::new())?)),
+        Type::Bits(bit_count) => {
+            let value = value.to_u64()?;
+            Ok(SymbolicValue::Bits(bits(
+                *bit_count,
+                format!("(_ bv{value} {bit_count})"),
+            )?))
+        }
+        Type::Tuple(element_types) => {
+            let elements = value.get_elements()?;
+            if elements.len() != element_types.len() {
+                return Err(symex_error("tuple literal arity mismatch"));
+            }
+            Ok(SymbolicValue::Tuple(
+                element_types
+                    .iter()
+                    .zip(&elements)
+                    .map(|(element_type, element)| literal_value(element_type, element))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        }
+        Type::Array(array) => {
+            let elements = value.get_elements()?;
+            if elements.len() != array.element_count {
+                return Err(symex_error("array literal length mismatch"));
+            }
+            Ok(SymbolicValue::Array(
+                elements
+                    .iter()
+                    .map(|element| literal_value(&array.element_type, element))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        }
+        Type::Token => Err(symex_error("token literals are not supported")),
     }
 }
 
