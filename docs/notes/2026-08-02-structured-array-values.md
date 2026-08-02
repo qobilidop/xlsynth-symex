@@ -15,9 +15,9 @@ sharing and a backend-neutral DAG should address duplication before larger
 arrays become routine corpus inputs.
 
 Both directed differential testing and differential fuzz testing are required
-for optimized and unoptimized `find_index` IR. Symbolic equivalence is recorded
-as `blocked:structured-symbolic-interface`: the native evaluator flattens bits
-leaves, while the independent XLS SMT translation retains structured sorts, and
-the harness does not yet reconstruct a common function signature. This is an
-interface limitation rather than evidence about equivalence. Path-witness replay
-remains blocked on selection traces, consistently with the rest of the corpus.
+for optimized and unoptimized `find_index` IR. The equivalence harness rebuilds
+the finite SMT array from native bits leaves and compares both tuple projections,
+so the optimized form is proved against the independent XLS translation. The
+unoptimized form is explicitly blocked because that translator rejects its
+`counted_for`. Path-witness replay remains blocked on selection traces,
+consistently with the rest of the corpus.

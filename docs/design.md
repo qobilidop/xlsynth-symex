@@ -417,12 +417,12 @@ Symbolic equivalence is required for every currently supported curated function
 and IR form where XLS's reference translator can produce a query. A known XLS
 translator abort on the zero-width-heavy unoptimized overflow example is
 recorded as an explicit reference-side blocker; the optimized form proves
-equivalent. The XLS reference translator and the native evaluator do not yet
-share a reconstruction convention for flattened structured parameters and
-results, so symbolic equivalence for `find_index` is explicitly blocked at that
-interface while both differential modes remain required. Until explicit path
-enumeration and canonical selection traces exist, path-witness replay remains
-blocked. The corpus matrix records these limitations explicitly.
+equivalent. The harness reconstructs finite arrays and compares tuple leaves to
+prove optimized `find_index` equivalent as well. Its unoptimized form remains
+blocked because the XLS reference translator does not support `counted_for`;
+both differential modes are still required. Until explicit path enumeration
+and canonical selection traces exist, path-witness replay remains blocked. The
+corpus matrix records these limitations explicitly.
 
 Useful measurements include operation and type coverage, expression DAG size,
 paths and choice outcomes, concretely pruned selects, visited IR nodes,

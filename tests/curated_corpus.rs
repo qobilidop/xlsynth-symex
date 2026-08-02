@@ -18,7 +18,6 @@ const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
 const XLS_REFERENCE_TRANSLATOR_BLOCKER: &str = "blocked:xls-reference-translator";
-const STRUCTURED_INTERFACE_BLOCKER: &str = "blocked:structured-symbolic-interface";
 const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
 
 type BitsInput = Vec<(usize, u64)>;
@@ -478,13 +477,18 @@ fn assert_symbolic_equivalence(
             ir_form.name()
         )
     });
-    let arguments = symbolic
-        .parameters
-        .iter()
-        .map(|parameter| format!(" {}", parameter.name))
-        .collect::<String>();
+    let comparison = if entry.id == "find_index" {
+        find_index_equivalence_comparison(symbolic, function_name)
+    } else {
+        let arguments = symbolic
+            .parameters
+            .iter()
+            .map(|parameter| format!(" {}", parameter.name))
+            .collect::<String>();
+        format!("(= xlsynth_symex_result (select {function_name}{arguments}))")
+    };
     let query = format!(
-        "{}\n{reference}\n(assert (not (= xlsynth_symex_result (select {function_name}{arguments}))))\n(check-sat)\n",
+        "{}\n{reference}\n(assert (not {comparison}))\n(check-sat)\n",
         symbolic.result_smtlib
     );
     let mut child = Command::new("z3")
@@ -516,6 +520,25 @@ fn assert_symbolic_equivalence(
         entry.id,
         ir_form.name(),
     );
+}
+
+fn find_index_equivalence_comparison(symbolic: &SymexResult, function_name: &str) -> String {
+    assert_eq!(symbolic.parameters.len(), 5);
+    let mut array = "((as const (Array (_ BitVec 3) (_ BitVec 4))) (_ bv0 4))".to_owned();
+    for (index, parameter) in symbolic.parameters[..4].iter().enumerate() {
+        array = format!("(store {array} (_ bv{index} 3) {})", parameter.name);
+    }
+    let reference_result = format!(
+        "(select {function_name} {array} {})",
+        symbolic.parameters[4].name
+    );
+    let mut native_leaves = Vec::new();
+    symbolic.result.flatten_bits(&mut native_leaves);
+    assert_eq!(native_leaves.len(), 2);
+    format!(
+        "(and (= {} (|(bits[1], bits[2])_0| {reference_result})) (= {} (|(bits[1], bits[2])_1| {reference_result})))",
+        native_leaves[0].expression, native_leaves[1].expression
+    )
 }
 
 #[test]
@@ -581,7 +604,7 @@ fn curated_manifest_and_validation_matrix_are_complete() {
         assert!(
             matches!(
                 validation.symbolic_equivalence,
-                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER | STRUCTURED_INTERFACE_BLOCKER
+                "required" | XLS_REFERENCE_TRANSLATOR_BLOCKER
             ),
             "{} {} invalid symbolic equivalence status: {}",
             validation.id,
@@ -625,7 +648,7 @@ fn symbolic_equivalence_checking() {
                 .unwrap();
             if matches!(
                 validation.symbolic_equivalence,
-                XLS_REFERENCE_TRANSLATOR_BLOCKER | STRUCTURED_INTERFACE_BLOCKER
+                XLS_REFERENCE_TRANSLATOR_BLOCKER
             ) {
                 continue;
             }

@@ -9,5 +9,5 @@ overflow_detect	unoptimized	required	required	blocked:xls-reference-translator	b
 overflow_detect	optimized	required	required	required	blocked:selection-traces
 lfsr	unoptimized	required	required	blocked:xls-reference-translator	blocked:selection-traces
 lfsr	optimized	required	required	required	blocked:selection-traces
-find_index	unoptimized	required	required	blocked:structured-symbolic-interface	blocked:selection-traces
-find_index	optimized	required	required	blocked:structured-symbolic-interface	blocked:selection-traces
+find_index	unoptimized	required	required	blocked:xls-reference-translator	blocked:selection-traces
+find_index	optimized	required	required	required	blocked:selection-traces
