@@ -3,3 +3,4 @@ tiny_adder	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565
 nested_sel	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/nested_sel.x	nested_sel.x	nested_sel	main	all-symbolic	bits,compare,select	Apache-2.0	2048	5eed000000000002
 riscv_decode_opcode	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/riscv_simple.x	riscv_simple.x	riscv_simple	decode_opcode	all-symbolic	bits,bit-slice,decoder	Apache-2.0	2048	5eed000000000003
 overflow_detect	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/overflow_detect.x	overflow_detect.x	overflow_detect	main	all-symbolic	bits,tuple,multiply,overflow	Apache-2.0	2048	5eed000000000004
+lfsr	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/lfsr.x	lfsr.x	lfsr	lfsr8	all-symbolic	bits,counted-for,bit-slice,concat	Apache-2.0	2048	5eed000000000005

@@ -114,7 +114,8 @@ arithmetic and Boolean operations, reductions, comparisons, extensions, static
 and dynamic slices, merged selects, structural tuple construction and indexing,
 and recursive calls to pure functions in the package. Zero-width bits are
 carried structurally with no SMT term and disappear through operations such as
-concatenation and extension.
+concatenation and extension. `counted_for` loops with static trip counts are
+evaluated by repeatedly applying their pure body function to a symbolic carry.
 
 Direct SMT expression strings are an expedient initial representation; they
 make the independent validation boundary available early but do not yet provide
@@ -402,7 +403,8 @@ form.
 
 The curated slice currently covers widened addition (`tiny_adder`), nested
 selection (`nested_sel`), the opcode decoder from `riscv_simple`, and tuple- and
-multiplication-heavy overflow detection (`overflow_detect`). Corpus
+multiplication-heavy overflow detection (`overflow_detect`). An eight-bit LFSR
+adds bounded loops, dynamic slicing, concatenation, and XOR-heavy logic. Corpus
 cases gate only when both IR forms are supported. Examples whose unoptimized IR
 contains operations rejected by the current XLS SMT translator, such as
 `counted_for`, should be added later with an explicit capability-status model

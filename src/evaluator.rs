@@ -245,6 +245,41 @@ impl Evaluator<'_> {
                         .collect::<Result<Vec<_>, _>>()?;
                     self.evaluate_function(callee, arguments)?
                 }
+                NodePayload::CountedFor {
+                    init,
+                    trip_count,
+                    stride,
+                    body,
+                    invariant_args,
+                } => {
+                    let body_function = self.package.get_fn(body).ok_or_else(|| {
+                        symex_error(format!("counted_for body {body:?} is absent from package"))
+                    })?;
+                    let induction_width = body_function
+                        .params
+                        .first()
+                        .ok_or_else(|| symex_error("counted_for body has no induction parameter"))
+                        .and_then(|parameter| bits_width(&parameter.ty))?;
+                    let invariants = invariant_args
+                        .iter()
+                        .map(|operand| get_value(&values, *operand).cloned())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut carry = get_value(&values, *init)?.clone();
+                    for iteration in 0..*trip_count {
+                        let induction = iteration.checked_mul(*stride).ok_or_else(|| {
+                            symex_error("counted_for induction value overflowed usize")
+                        })?;
+                        let mut arguments = Vec::with_capacity(2 + invariants.len());
+                        arguments.push(SymbolicValue::Bits(bits(
+                            induction_width,
+                            format!("(_ bv{induction} {induction_width})"),
+                        )?));
+                        arguments.push(carry);
+                        arguments.extend(invariants.iter().cloned());
+                        carry = self.evaluate_function(body_function, arguments)?;
+                    }
+                    carry
+                }
                 payload => {
                     return Err(symex_error(format!(
                         "unsupported XLS IR operation {} at node {}",

@@ -71,6 +71,7 @@ impl<'a> ManifestEntry<'a> {
             "nested_sel.x" => include_str!("corpus/curated/nested_sel.x"),
             "riscv_simple.x" => include_str!("corpus/curated/riscv_simple.x"),
             "overflow_detect.x" => include_str!("corpus/curated/overflow_detect.x"),
+            "lfsr.x" => include_str!("corpus/curated/lfsr.x"),
             fixture => panic!("manifest references unknown curated fixture: {fixture}"),
         }
     }
@@ -81,6 +82,7 @@ impl<'a> ManifestEntry<'a> {
             "nested_sel" => &[8, 8, 8, 8, 8, 8],
             "riscv_decode_opcode" => &[32],
             "overflow_detect" => &[16, 16],
+            "lfsr" => &[8],
             id => panic!("manifest entry has no input shape: {id}"),
         }
     }
@@ -119,6 +121,14 @@ impl<'a> ManifestEntry<'a> {
                 vec![(16, 255), (16, 1)],
                 vec![(16, 16), (16, 16)],
                 vec![(16, 65_535), (16, 65_535)],
+            ],
+            "lfsr" => vec![
+                vec![(8, 0)],
+                vec![(8, 1)],
+                vec![(8, 37)],
+                vec![(8, 155)],
+                vec![(8, 237)],
+                vec![(8, 255)],
             ],
             id => panic!("manifest entry has no curated vectors: {id}"),
         }
@@ -284,6 +294,16 @@ fn assert_differential_samples(
         entry.id,
         mode.name()
     );
+    let parameter_declarations = symbolic
+        .parameters
+        .iter()
+        .map(|parameter| format!("({} (_ BitVec {}))", parameter.name, parameter.bit_count))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let candidate = format!(
+        "(define-fun xlsynth_symex_apply ({parameter_declarations}) (_ BitVec {}) {})\n",
+        symbolic.result.bit_count, symbolic.result.expression
+    );
     let mut mismatches = Vec::with_capacity(samples.len());
     for (case, sample) in samples.iter().enumerate() {
         let args: Vec<_> = sample
@@ -308,24 +328,22 @@ fn assert_differential_samples(
             )
         });
         assert_eq!(symbolic.parameters.len(), sample.len());
-        let bindings = symbolic
+        let arguments = symbolic
             .parameters
             .iter()
             .zip(sample)
             .map(|(parameter, (width, value))| {
                 assert_eq!(parameter.bit_count, *width);
-                format!("({} (_ bv{value} {width}))", parameter.name)
+                format!(" (_ bv{value} {width})")
             })
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect::<String>();
         mismatches.push(format!(
-            "(let ({bindings}) (not (= {} (_ bv{expected} {expected_width}))))",
-            symbolic.result.expression
+            "(not (= (xlsynth_symex_apply{arguments}) (_ bv{expected} {expected_width})))"
         ));
     }
 
     let query = format!(
-        "(assert (or\n  {}))\n(check-sat)\n",
+        "{candidate}(assert (or\n  {}))\n(check-sat)\n",
         mismatches.join("\n  ")
     );
     let mut child = Command::new("z3")

@@ -41,7 +41,7 @@ on pull requests and publishes it after relevant changes land on `main`.
 The current native bits evaluator traverses XLS IR through `xlsynth-pir` and
 constructs independent SMT bit-vector expressions for core arithmetic,
 Boolean, comparison, extension, selection, invocation, slicing, reductions,
-and structural tuple operations.
+structural tuple operations, and statically bounded `counted_for` loops.
 Tests run deterministic generated IR programs against Z3 and the XLS
 interpreter. An offline curated corpus also compiles pinned upstream XLS
 examples and checks selected pure functions in optimized and unoptimized forms.
