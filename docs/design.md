@@ -366,6 +366,22 @@ Both optimized and unoptimized IR should be tested. Corpus manifests should pin
 the XLS/xlsynth version, upstream revision, function name, argument partition,
 and expected feature requirements.
 
+The curated upstream tier is stored under `tests/corpus/curated`. Tests must be
+offline and reproducible: DSLX fixtures are copied without modification from a
+pinned `xlsynth/xlsynth` commit compatible with the repository's
+`xlsynth-crate` dependency, retain their upstream license notices, and are
+described by a tab-separated manifest. The harness compiles each fixture with
+the bundled DSLX standard library and exercises the selected pure function in
+both unoptimized and optimized IR forms. Deterministic concrete samples are
+evaluated by the XLS interpreter and asserted against the symbolic SMT result.
+
+The initial curated slice covers widened addition (`tiny_adder`), nested
+selection (`nested_sel`), and the opcode decoder from `riscv_simple`. Corpus
+cases gate only when both IR forms are supported. Examples whose unoptimized IR
+contains operations rejected by the current XLS SMT translator, such as
+`counted_for`, should be added later with an explicit capability-status model
+rather than silently skipping a validation mode.
+
 Useful measurements include operation and type coverage, expression DAG size,
 paths and choice outcomes, concretely pruned selects, visited IR nodes,
 construction and solving time, and peak memory. For mixed evaluation, a useful

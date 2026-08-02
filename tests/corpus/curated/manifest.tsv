@@ -1,0 +1,4 @@
+# id	repository	revision	source_path	fixture	module	function	argument_partition	required_features	license
+tiny_adder	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/tiny_adder.x	tiny_adder.x	tiny_adder	tiny_adder	all-symbolic	bits,add,zero-extension	Apache-2.0
+nested_sel	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/nested_sel.x	nested_sel.x	nested_sel	main	all-symbolic	bits,compare,select	Apache-2.0
+riscv_decode_opcode	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/riscv_simple.x	riscv_simple.x	riscv_simple	decode_opcode	all-symbolic	bits,bit-slice,decoder	Apache-2.0

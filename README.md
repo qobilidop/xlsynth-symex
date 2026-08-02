@@ -42,7 +42,10 @@ The first symbolic-evaluation milestone is a deliberately minimal vertical
 slice. `xlsynth_symex::evaluate` returns one unconditional path and delegates
 the merged SMT-LIB result to XLS's Z3 translator. Tests compare this adapter
 with the upstream SMT output and run deterministic generated IR programs
-against both Z3 and the XLS interpreter.
+against both Z3 and the XLS interpreter. An offline curated corpus also compiles
+pinned upstream XLS examples and checks selected pure functions in optimized
+and unoptimized forms. See `tests/corpus/curated/README.md` for its provenance
+and extension workflow.
 
 See:
 
