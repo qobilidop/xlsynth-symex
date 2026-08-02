@@ -16,6 +16,25 @@ The initial scope is deliberately narrow: pure XLS IR functions over bits,
 tuples, and fixed-size arrays. Stateful XLS constructs and whole-machine
 symbolic execution are not part of the library.
 
+## Development
+
+Run development commands in the Ubuntu-based development container:
+
+```text
+./dev.sh cargo test --workspace
+./dev.sh cargo fmt --all -- --check
+./dev.sh
+```
+
+`dev.sh` pulls `ghcr.io/qobilidop/xlsynth-symex/dev:main` on first use and
+falls back to a local build if the image has not been published yet. Use
+`./dev.sh --pull` to refresh it or `./dev.sh --build` to rebuild it locally.
+Set `XLSYNTH_SYMEX_DEV_IMAGE` to select another registry or immutable SHA tag.
+
+Editors supporting the Development Containers specification can use
+`.devcontainer/devcontainer.json` directly. GitHub Actions validates the image
+on pull requests and publishes it after relevant changes land on `main`.
+
 See:
 
 - [Design](docs/design.md) for the current, authoritative design.

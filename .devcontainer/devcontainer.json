@@ -1,0 +1,7 @@
+{
+  "name": "xlsynth-symex",
+  "image": "ghcr.io/qobilidop/xlsynth-symex/dev:main",
+  "workspaceFolder": "/workspace/xlsynth-symex",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/xlsynth-symex,type=bind",
+  "remoteUser": "root"
+}
