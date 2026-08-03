@@ -1625,11 +1625,20 @@ pub(crate) fn evaluation_input(
 
 fn literal_value(arena: &mut ExprArena, ty: &Type, value: &IrValue) -> Result<Value, XlsynthError> {
     match ty {
-        Type::Bits(0) => Ok(Value::Bits(bits(0, None)?)),
         Type::Bits(bit_count) => {
-            let ir_bits = value.to_bits()?;
+            let ir_bits = value.to_bits().map_err(|_| {
+                symex_error(format!(
+                    "concrete value {value} is not bits-typed as required by {ty}"
+                ))
+            })?;
             if ir_bits.get_bit_count() != *bit_count {
-                return Err(symex_error("bits literal width does not match node type"));
+                return Err(symex_error(format!(
+                    "concrete bits width {} does not match {ty}",
+                    ir_bits.get_bit_count()
+                )));
+            }
+            if *bit_count == 0 {
+                return Ok(Value::Bits(bits(0, None)?));
             }
             Ok(Value::Bits(bits(
                 *bit_count,
@@ -1637,7 +1646,19 @@ fn literal_value(arena: &mut ExprArena, ty: &Type, value: &IrValue) -> Result<Va
             )?))
         }
         Type::Tuple(element_types) => {
-            let elements = value.get_elements()?;
+            let elements = value.get_elements().map_err(|_| {
+                symex_error(format!(
+                    "concrete value {value} is not tuple-typed as required by {ty}"
+                ))
+            })?;
+            // `IrValue::get_elements` accepts both tuples and arrays. Rebuilding
+            // the tuple preserves the aggregate kind in this otherwise
+            // shape-only recursive lowering.
+            if !IrValue::make_tuple(&elements).eq(value) {
+                return Err(symex_error(format!(
+                    "concrete value {value} is not tuple-typed as required by {ty}"
+                )));
+            }
             if elements.len() != element_types.len() {
                 return Err(symex_error("tuple literal arity mismatch"));
             }
@@ -1650,7 +1671,21 @@ fn literal_value(arena: &mut ExprArena, ty: &Type, value: &IrValue) -> Result<Va
             ))
         }
         Type::Array(array) => {
-            let elements = value.get_elements()?;
+            let elements = value.get_elements().map_err(|_| {
+                symex_error(format!(
+                    "concrete value {value} is not array-typed as required by {ty}"
+                ))
+            })?;
+            // See the tuple case above: element extraction alone does not
+            // distinguish the two aggregate kinds.
+            let rebuilt = IrValue::make_array(&elements).map_err(|error| {
+                symex_error(format!("invalid concrete array value {value}: {error}"))
+            })?;
+            if !rebuilt.eq(value) {
+                return Err(symex_error(format!(
+                    "concrete value {value} is not array-typed as required by {ty}"
+                )));
+            }
             if elements.len() != array.element_count {
                 return Err(symex_error("array literal length mismatch"));
             }

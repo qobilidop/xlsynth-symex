@@ -18,15 +18,15 @@ use std::time::Duration;
 use xlsynth::{IrFunction, IrPackage, IrValue, XlsynthError};
 
 /// Specifies which leaves of a function argument are concrete or symbolic.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EvaluationInput {
     /// Makes every bits leaf in the corresponding type symbolic.
     Symbolic,
-    /// Supplies a fully concrete XLS value.
+    /// Supplies a fully concrete XLS value matching the recursive argument type.
     Concrete(IrValue),
-    /// Supplies independently concrete or symbolic tuple elements.
+    /// Supplies one independently concrete or symbolic input per tuple element.
     Tuple(Vec<EvaluationInput>),
-    /// Supplies independently concrete or symbolic array elements.
+    /// Supplies one independently concrete or symbolic input per array element.
     Array(Vec<EvaluationInput>),
 }
 
@@ -149,7 +149,7 @@ pub enum SelectionOutcome {
 pub type SelectionTrace = BTreeMap<SelectionId, SelectionOutcome>;
 
 /// Concrete inputs produced by the solver for one feasible guarded result.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Witness {
     /// Complete typed function arguments in signature order.
     pub inputs: Vec<IrValue>,
@@ -158,7 +158,7 @@ pub struct Witness {
 }
 
 /// One feasible symbolic result identified by a canonical selection trace.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuardedResult {
     /// Predicate under which this result is active.
     pub guard: Guard,
@@ -199,7 +199,7 @@ pub enum EnumerationCompleteness {
 }
 
 /// Backend-neutral bit-vector term used in caller assumptions.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConstraintTerm {
     /// A symbolic bits leaf identified independently of solver rendering.
     Input(InputLeaf),
@@ -237,7 +237,7 @@ pub enum ConstraintComparison {
 }
 
 /// Backend-neutral Boolean constraint over symbolic input leaves.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputConstraint {
     /// Constant Boolean value.
     Bool(bool),
@@ -259,7 +259,7 @@ pub enum InputConstraint {
 }
 
 /// Configuration for canonical selection enumeration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnumerationOptions {
     /// Optional maximum number of feasible guarded results to return.
     ///
@@ -318,9 +318,9 @@ pub struct EnumerationStatistics {
     pub solver_queries: usize,
     /// Syntactic candidates rejected as infeasible by the solver.
     pub infeasible_candidates: usize,
-    /// Time spent constructing symbolic candidates, excluding solver queries.
+    /// Time spent constructing symbolic candidates before solver-session setup.
     pub construction_time: Duration,
-    /// Aggregate wall time spent in solver queries.
+    /// Wall time spent starting and lowering into the solver, then issuing queries.
     pub solver_time: Duration,
 }
 
@@ -635,6 +635,25 @@ pub fn enumerate_package_with_inputs_and_options(
     enumerator::enumerate_package_text(&package.to_string(), function_name, Some(inputs), options)
 }
 
+/// Enumerates textual package-function selections with mixed inputs.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate_ir_package`],
+/// or when the supplied inputs do not match the function signature.
+pub fn enumerate_ir_package_with_inputs(
+    package_ir: &str,
+    function_name: &str,
+    inputs: &[EvaluationInput],
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(
+        package_ir,
+        function_name,
+        Some(inputs),
+        &EnumerationOptions::default(),
+    )
+}
+
 /// Enumerates textual package-function selections with mixed inputs and options.
 ///
 /// # Errors
@@ -753,5 +772,62 @@ top fn pair(x: bits[8]) -> (bits[8], bits[8]) {
         let function = package.get_function("add").unwrap();
         let error = evaluate_with_inputs(&function, &[EvaluationInput::Symbolic]).unwrap_err();
         assert!(error.to_string().contains("expects 2 inputs, got 1"));
+    }
+
+    #[test]
+    fn validates_complete_concrete_value_types() {
+        let zero_ir = r"package test
+
+top fn zero(x: bits[0] id=1) -> bits[0] {
+  ret result: bits[0] = identity(x, id=2)
+}
+";
+        let zero_package = IrPackage::parse_ir(zero_ir, None).unwrap();
+        let zero_function = zero_package.get_function("zero").unwrap();
+        let zero = IrValue::from_bits(&xlsynth::IrBits::zero(0));
+        let evaluated =
+            evaluate_with_inputs(&zero_function, &[EvaluationInput::Concrete(zero)]).unwrap();
+        assert_eq!(
+            evaluated.result,
+            SymbolicValue::Bits(SymbolicBits {
+                bit_count: 0,
+                expression: String::new(),
+            })
+        );
+
+        let wrong_width = IrValue::make_ubits(1, 0).unwrap();
+        let error = evaluate_with_inputs(&zero_function, &[EvaluationInput::Concrete(wrong_width)])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("concrete bits width 1 does not match bits[0]")
+        );
+
+        let pair_ir = r"package test
+
+top fn pair(x: (bits[8], bits[8]) id=1) -> (bits[8], bits[8]) {
+  ret result: (bits[8], bits[8]) = identity(x, id=2)
+}
+";
+        let elements = [
+            IrValue::make_ubits(8, 1).unwrap(),
+            IrValue::make_ubits(8, 2).unwrap(),
+        ];
+        let tuple = IrValue::make_tuple(&elements);
+        let enumerated = enumerate_ir_package_with_inputs(
+            pair_ir,
+            "pair",
+            &[EvaluationInput::Concrete(tuple.clone())],
+        )
+        .unwrap();
+        assert_eq!(enumerated.completeness, EnumerationCompleteness::Complete);
+        assert_eq!(enumerated.results[0].witness.inputs, vec![tuple]);
+
+        let array = IrValue::make_array(&elements).unwrap();
+        let error =
+            enumerate_ir_package_with_inputs(pair_ir, "pair", &[EvaluationInput::Concrete(array)])
+                .unwrap_err();
+        assert!(error.to_string().contains("is not tuple-typed"));
     }
 }

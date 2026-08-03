@@ -2,8 +2,8 @@
 
 This guide is for Rust users of `xlsynth-symex`. It is the source of truth for
 the library's public semantics: what it evaluates, what a selection trace
-means, and when an enumeration constitutes full coverage. Item-level signatures and fields
-belong in the crate's Rust API documentation.
+means, and when an enumeration constitutes full coverage. Item-level
+signatures and fields belong in the crate's Rust API documentation.
 
 ## When to use this library
 
@@ -37,15 +37,15 @@ complete source is
 
 The enumeration entry points form three families:
 
-| Input boundary | Leaf function | Package function | Textual package IR |
+| Inputs and options | Leaf function | Package function | Textual package IR |
 |---|---|---|---|
-| All symbolic | `enumerate` | `enumerate_package` | `enumerate_ir_package` |
-| Mixed inputs | `enumerate_with_inputs` | `enumerate_package_with_inputs` | `enumerate_ir_package_with_inputs_and_options` |
-| Options | `enumerate_with_options` | `enumerate_package_with_options` | `enumerate_ir_package_with_options` |
+| All symbolic, defaults | `enumerate` | `enumerate_package` | `enumerate_ir_package` |
+| All symbolic, options | `enumerate_with_options` | `enumerate_package_with_options` | `enumerate_ir_package_with_options` |
+| Mixed inputs, defaults | `enumerate_with_inputs` | `enumerate_package_with_inputs` | `enumerate_ir_package_with_inputs` |
+| Mixed inputs, options | `enumerate_with_inputs_and_options` | `enumerate_package_with_inputs_and_options` | `enumerate_ir_package_with_inputs_and_options` |
 
-Combined mixed-input-and-options variants are available where applicable. Use
-a package entry point whenever the selected function invokes another function;
-a standalone `IrFunction` does not carry its callees.
+Use a package entry point whenever the selected function invokes another
+function; a standalone `IrFunction` does not carry its callees.
 
 ## Reading a result
 
@@ -70,14 +70,16 @@ present exactly once. Together, the returned guards form a disjoint partition
 of the constrained symbolic-input domain.
 
 `Incomplete(reason)` means the guarded results may still be useful, but they do
-not provide full coverage. Reasons include a returned-result limit, the internal syntactic-branch
-safety ceiling, and a failed, timed-out, or indeterminate solver query. Never
-infer completeness from the result count or from a successful function return.
+not provide full coverage. Reasons include a returned-result limit, the
+internal syntactic-branch safety ceiling, and a failed, timed-out, or
+indeterminate solver query. Never infer completeness from the result count or
+from a successful function return.
 
 The default solver timeout is ten seconds per feasibility/model query. The
-internal safety ceiling is 1,000,000 syntactic branches. `max_results` limits the
-number of guarded results returned; the current implementation constructs and solves
-candidates before truncating the result, so it is not a computational budget.
+internal safety ceiling is 1,000,000 syntactic branches. `max_results` limits
+the number of guarded results returned; the current implementation constructs
+and solves candidates before truncating the result, so it is not a
+computational budget.
 
 ## Inputs and assumptions
 
@@ -86,6 +88,10 @@ candidates before truncating the result, so it is not a computational budget.
 - `Symbolic` makes every bits leaf below that value symbolic;
 - `Concrete(IrValue)` supplies a fully concrete value; and
 - `Tuple` and `Array` independently describe their elements.
+
+A concrete value must match the complete recursive XLS argument type. Bits
+widths are checked even for `bits[0]`, and tuples and arrays remain distinct
+types even when they contain identical elements.
 
 Concrete selections are resolved without symbolic forking and do not demand
 inactive case cones. They still appear in the trace when they are active, which
@@ -169,7 +175,9 @@ The executable v1 smoke test enumerates 64 `one_hot_sel` masks under a
 30-second ceiling. This is a bounded release guard, not a general scalability
 claim. Consult [`../developer/verification.md`](../developer/verification.md)
 for the measured environment and evidence, and inspect
-`EnumerationResult::statistics` for each real workload.
+`EnumerationResult::statistics` for each real workload. `construction_time`
+ends before solver-session setup; `solver_time` includes starting the backend,
+lowering the expression arena, and issuing all candidate queries.
 
 ## Getting help or contributing
 

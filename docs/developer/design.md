@@ -15,7 +15,8 @@ invariants:
 
 - public values and constraints are typed and independent of a particular
   solver API;
-- concrete inputs prune unused dataflow before expressions are constructed;
+- during enumeration, concrete selections prune unused dataflow before their
+  inactive case expressions are constructed;
 - a complete enumeration records every active selection admitted by the
   policy, even when its cases compute the same value;
 - every partial result states why it is incomplete;
@@ -218,8 +219,10 @@ truth.
 
 `EvaluationInput` recursively assigns concrete or symbolic status to argument
 leaves. Symbolic leaves receive `InputLeaf` identities based on argument and
-element positions. Those structural identities also anchor caller assumptions
-and solver models, so the public API never depends on rendered variable names.
+element positions. Concrete values are checked against the complete recursive
+XLS type, including zero-width bits and the tuple/array distinction. Structural
+input identities anchor caller assumptions; rendered solver names remain
+serialization metadata rather than the constraint-addressing scheme.
 
 ## Demand-driven evaluation
 
@@ -331,7 +334,8 @@ checks remain independent verification obligations.
 Expression and candidate construction are bounded separately from solver
 queries. Statistics report expression nodes, evaluated nodes, memoization hits,
 selection outcomes, solver queries, infeasible candidates, and construction and
-solver time.
+solver time. Construction time ends before solver-session setup; solver time
+includes backend startup, arena lowering, and candidate queries.
 
 A hard candidate-expansion ceiling prevents impractical materialization and
 reports an incomplete result. The public returned-result limit is applied after

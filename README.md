@@ -6,7 +6,7 @@ Symbolic evaluation and exhaustive selection enumeration for finite, pure
 
 ```text
 pure XLS function + concrete/symbolic inputs
-    -> complete selection partition
+    -> selection partition or explicit incomplete status
        + canonical trace + guard + residual result + concrete witness
 ```
 

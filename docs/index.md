@@ -1,12 +1,13 @@
 # xlsynth-symex documentation
 
-`xlsynth-symex` symbolically evaluates finite, pure XLS functions and produces a
-complete partition of every feasible canonical IR selection trace, with its
-guard, residual result, and concrete witness.
+`xlsynth-symex` symbolically evaluates finite, pure XLS functions and can
+produce a complete partition of every feasible canonical IR selection trace,
+with its guard, residual result, and concrete witness. Explicit completeness
+status distinguishes full coverage from a useful partial result.
 
 ```text
 pure XLS function + concrete/symbolic inputs
-    -> complete selection partition
+    -> selection partition or explicit incomplete status
        + canonical trace + guard + residual result + concrete witness
 ```
 
