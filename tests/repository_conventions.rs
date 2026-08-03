@@ -41,7 +41,7 @@ fn maintained_text_file(path: &Path) -> bool {
     }
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("json" | "md" | "rs" | "sh" | "toml" | "tsv" | "x" | "yaml" | "yml")
+        Some("json" | "md" | "rs" | "sh" | "svg" | "toml" | "tsv" | "x" | "yaml" | "yml")
     )
 }
 
@@ -60,7 +60,7 @@ fn requires_spdx(path: &Path) -> bool {
     path.file_name().and_then(|name| name.to_str()) == Some("Dockerfile")
         || matches!(
             path.extension().and_then(|extension| extension.to_str()),
-            Some("json" | "rs" | "sh" | "tsv" | "x" | "yaml" | "yml")
+            Some("json" | "rs" | "sh" | "svg" | "tsv" | "x" | "yaml" | "yml")
         )
 }
 
@@ -85,6 +85,29 @@ fn maintained_sources_have_spdx_headers() {
         })
         .collect::<Vec<_>>();
     assert!(missing.is_empty(), "missing SPDX identifiers: {missing:#?}");
+}
+
+#[test]
+fn maintained_svg_assets_are_accessible() {
+    let invalid = repository_files()
+        .into_iter()
+        .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("svg"))
+        .filter(|path| {
+            let contents = fs::read_to_string(path).expect("maintained SVG must be UTF-8");
+            [
+                "<title id=",
+                "<desc id=",
+                "role=\"img\"",
+                "aria-labelledby=",
+            ]
+            .into_iter()
+            .any(|marker| !contents.contains(marker))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        invalid.is_empty(),
+        "SVG assets without accessible metadata: {invalid:#?}"
+    );
 }
 
 #[test]

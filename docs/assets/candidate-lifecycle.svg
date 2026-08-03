@@ -1,0 +1,137 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Lifecycle of an enumerated candidate path</title>
+  <desc id="desc">Demand-driven evaluation creates guarded candidate states containing a condition, sparse trace, and memoized values. Caller constraints are conjoined before a solver query. Satisfiable candidates become PathResults with typed witnesses, unsatisfiable candidates are pruned, and indeterminate queries make the overall enumeration incomplete. Invalid inputs, malformed IR, and model reconstruction failures remain errors rather than solver outcomes.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .demand { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+      .candidate { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .constraint { fill: #ecfeff; stroke: #0891b2; stroke-width: 2; }
+      .solver { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; }
+      .sat { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+      .unsat { fill: #f1f5f9; stroke: #64748b; stroke-width: 2; }
+      .unknown { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+      .error { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; }
+      .title { font: 700 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .heading { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1px; fill: #334155; }
+      .label { font: 650 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .tiny { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 500 13px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #0f172a; }
+      .status-green { font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #15803d; }
+      .status-gray { font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #475569; }
+      .status-amber { font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #b45309; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+      .green-edge { fill: none; stroke: #16a34a; stroke-width: 2.5; marker-end: url(#arrow); }
+      .gray-edge { fill: none; stroke: #64748b; stroke-width: 2.5; marker-end: url(#arrow); }
+      .amber-edge { fill: none; stroke: #d97706; stroke-width: 2.5; marker-end: url(#arrow); }
+      .red-edge { fill: none; stroke: #dc2626; stroke-width: 2; stroke-dasharray: 7 5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="780" rx="18"/>
+  <text class="title" x="40" y="46">From demanded result to feasible path and witness</text>
+  <text class="subtitle" x="40" y="73">Construction is syntactic; feasibility is a separate solver decision with explicit outcomes.</text>
+
+  <text class="heading" x="50" y="116">1 · DEMAND</text>
+  <rect class="demand" x="40" y="132" width="190" height="270" rx="15"/>
+  <text class="label" x="135" y="165" text-anchor="middle">return node</text>
+  <path class="edge" d="M135 181 L135 216"/>
+  <rect class="panel" x="67" y="216" width="136" height="62" rx="11"/>
+  <text class="label" x="135" y="242" text-anchor="middle">outer choice</text>
+  <text class="mono" x="135" y="264" text-anchor="middle">sel(x; …)</text>
+  <path class="edge" d="M106 278 L80 316"/>
+  <path class="edge" d="M164 278 L190 316"/>
+  <text class="small" x="80" y="339" text-anchor="middle">outcome 0</text>
+  <text class="small" x="190" y="339" text-anchor="middle">outcome 1</text>
+  <text class="tiny" x="135" y="374" text-anchor="middle">Only demanded case cones</text>
+  <text class="tiny" x="135" y="391" text-anchor="middle">are built.</text>
+
+  <path class="edge" d="M230 245 L276 245"/>
+
+  <text class="heading" x="286" y="116">2 · CONSTRUCT</text>
+  <rect class="candidate" x="276" y="132" width="224" height="270" rx="15"/>
+  <text class="label" x="388" y="164" text-anchor="middle">candidate state</text>
+  <rect class="panel" x="302" y="187" width="172" height="46" rx="9"/>
+  <text class="mono" x="388" y="216" text-anchor="middle">condition: x = 0</text>
+  <rect class="panel" x="302" y="243" width="172" height="46" rx="9"/>
+  <text class="mono" x="388" y="272" text-anchor="middle">trace: outer = 0</text>
+  <rect class="panel" x="302" y="299" width="172" height="38" rx="9"/>
+  <text class="small" x="388" y="323" text-anchor="middle">path-local memoized values</text>
+  <text class="tiny" x="388" y="374" text-anchor="middle">One state per declared</text>
+  <text class="tiny" x="388" y="391" text-anchor="middle">policy outcome.</text>
+
+  <path class="edge" d="M500 245 L546 245"/>
+
+  <text class="heading" x="556" y="116">3 · CONSTRAIN</text>
+  <rect class="constraint" x="546" y="132" width="200" height="270" rx="15"/>
+  <text class="label" x="646" y="164" text-anchor="middle">typed Boolean condition</text>
+  <rect class="panel" x="570" y="196" width="152" height="50" rx="9"/>
+  <text class="mono" x="646" y="226" text-anchor="middle">x = 0</text>
+  <text class="label" x="646" y="277" text-anchor="middle">∧</text>
+  <rect class="panel" x="570" y="294" width="152" height="50" rx="9"/>
+  <text class="mono" x="646" y="324" text-anchor="middle">caller assumptions</text>
+  <text class="tiny" x="646" y="374" text-anchor="middle">Widths and symbolic leaves</text>
+  <text class="tiny" x="646" y="391" text-anchor="middle">are validated before solving.</text>
+
+  <path class="edge" d="M746 245 L792 245"/>
+
+  <text class="heading" x="802" y="116">4 · SOLVE</text>
+  <rect class="solver" x="792" y="132" width="168" height="270" rx="15"/>
+  <text class="label" x="876" y="165" text-anchor="middle">solver adapter</text>
+  <text class="small" x="876" y="196" text-anchor="middle">serialize SMT-LIB</text>
+  <text class="small" x="876" y="221" text-anchor="middle">start Z3</text>
+  <text class="small" x="876" y="246" text-anchor="middle">apply timeout</text>
+  <text class="small" x="876" y="271" text-anchor="middle">parse status/model</text>
+  <rect class="panel" x="816" y="298" width="120" height="40" rx="20"/>
+  <text class="mono" x="876" y="323" text-anchor="middle">sat? unsat?</text>
+  <text class="tiny" x="876" y="374" text-anchor="middle">Currently one process</text>
+  <text class="tiny" x="876" y="391" text-anchor="middle">per candidate.</text>
+
+  <path class="green-edge" d="M960 188 L994 188"/>
+  <rect class="sat" x="994" y="112" width="176" height="158" rx="14"/>
+  <text class="status-green" x="1012" y="136">SAT</text>
+  <text class="label" x="1082" y="163" text-anchor="middle">PathResult</text>
+  <text class="small" x="1082" y="189" text-anchor="middle">condition + value</text>
+  <text class="small" x="1082" y="212" text-anchor="middle">canonical trace</text>
+  <text class="small" x="1082" y="235" text-anchor="middle">typed XLS witness</text>
+  <text class="tiny" x="1082" y="255" text-anchor="middle">model + concrete inputs</text>
+
+  <path class="gray-edge" d="M960 245 L994 332"/>
+  <rect class="unsat" x="994" y="296" width="176" height="84" rx="14"/>
+  <text class="status-gray" x="1012" y="316">UNSAT</text>
+  <text class="label" x="1082" y="342" text-anchor="middle">prune candidate</text>
+  <text class="small" x="1082" y="366" text-anchor="middle">not a feasible path</text>
+
+  <path class="amber-edge" d="M960 302 L994 461"/>
+  <rect class="unknown" x="994" y="416" width="176" height="120" rx="14"/>
+  <text class="status-amber" x="1082" y="440" text-anchor="middle">UNKNOWN / TIMEOUT</text>
+  <text class="label" x="1082" y="465" text-anchor="middle">keep partial paths</text>
+  <text class="small" x="1082" y="491" text-anchor="middle">mark enumeration</text>
+  <text class="mono" x="1082" y="516" text-anchor="middle">Incomplete(reason)</text>
+
+  <rect class="panel" x="40" y="454" width="920" height="204" rx="16"/>
+  <text class="heading" x="64" y="487">A SEPARATE FAILURE LANE</text>
+  <text class="small" x="64" y="517">Malformed IR, invalid input shapes, ill-typed constraints, and invalid model reconstruction are</text>
+  <text class="small" x="64" y="540">API or semantic errors. They do not become solver indeterminacy or false infeasibility.</text>
+
+  <rect class="error" x="72" y="570" width="250" height="52" rx="11"/>
+  <text class="label" x="197" y="602" text-anchor="middle">invalid request or artifact</text>
+  <path class="red-edge" d="M322 596 L386 596"/>
+  <rect class="error" x="386" y="570" width="178" height="52" rx="11"/>
+  <text class="mono" x="475" y="602" text-anchor="middle">Err(…)</text>
+
+  <rect x="622" y="560" width="304" height="72" rx="11" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text class="small" x="774" y="583" text-anchor="middle">Limits and indeterminate solving</text>
+  <text class="small" x="774" y="602" text-anchor="middle">produce useful partial paths with</text>
+  <text class="small" x="774" y="621" text-anchor="middle">explicit incomplete status.</text>
+
+  <rect x="240" y="712" width="720" height="34" rx="17" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text class="label" x="600" y="735" text-anchor="middle">Complete means every feasible canonical candidate survived this process exactly once.</text>
+</svg>

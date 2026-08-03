@@ -23,27 +23,41 @@ invariants:
 - unsupported effects and state are rejected rather than approximated as pure
   values.
 
+## Mental model
+
+The core behavior can be seen in a function with two nested one-bit
+selections. In the notation below, selector value zero chooses the first case:
+
+```text
+inner  = sel(y; A, B)
+result = sel(x; inner, C)
+```
+
+For independent symbolic `x` and `y`, there are four concrete selector
+assignments but only three canonical paths. When `x = 1`, the result is `C`;
+the inner choice is outside the demanded slice, so `y` is a don't-care and no
+inner outcome appears in the trace. Merged evaluation preserves the same graph
+as one conditional value, while enumeration exposes the three path records.
+
+![One nested XLS graph represented as one merged expression and three canonical paths](../assets/one-graph-two-views.svg)
+
+*The two entry-point families share value semantics. Enumeration changes how
+declared choices are represented, not what the XLS function computes.*
+
+This example is intentionally a dataflow graph rather than a control-flow
+graph. The remainder of the design explains how values, demanded nodes,
+candidate states, solver queries, and typed witnesses realize this model.
+
 ## System boundary
 
 The implementation deliberately composes existing xlsynth layers:
 
-```text
-DSLX or textual XLS IR
-          |
-          | xlsynth: compile, parse, optimize, interpret, replay
-          v
-      textual XLS IR
-          |
-          | xlsynth-pir: native function representation and traversal
-          v
-  xlsynth-symex
-          |
-          +-- recursively structured concrete/symbolic values
-          +-- typed interned expression DAG
-          +-- demand-driven evaluation and path construction
-          +-- feasibility/model solver adapter
-          +-- canonical traces and typed witnesses
-```
+![Layered system boundary from XLS source through the backend-neutral symbolic core to solver adapters and downstream consumers](../assets/system-boundary.svg)
+
+*The orange region is the backend-neutral symbolic core. Z3 is behind a narrow
+adapter, concrete XLS replay is an independent validation oracle, and
+whole-machine execution consumes results downstream rather than entering this
+crate.*
 
 `xlsynth` remains the authoritative concrete semantics and independent SMT
 reference used by validation. `xlsynth-pir` is the native traversal layer. Its
@@ -61,6 +75,12 @@ concepts. A state transition is simply one possible pure XLS function.
 - bits leaves refer to typed expressions;
 - tuples contain ordered symbolic values; and
 - arrays contain a fixed number of ordered symbolic values.
+
+![A recursive symbolic value tree whose bits leaves share typed nodes in an interned expression DAG](../assets/symbolic-values.svg)
+
+*XLS aggregates retain their finite recursive shape. Only bits leaves refer to
+expression nodes, and public identities remain structural until an adapter
+serializes them for a solver.*
 
 Keeping tuples and arrays structural avoids introducing solver datatypes for
 finite XLS aggregates. Dynamic array operations lower to element-wise
@@ -139,6 +159,12 @@ separate, explicit minimization policy.
 Caller constraints use a small backend-neutral Boolean and bit-vector language.
 Lowering validates that referenced leaves are symbolic and that operand widths
 match before adding the expressions to the common DAG.
+
+![Candidate lifecycle from demand-driven construction through constraints and solving to a path, pruning, or incomplete result](../assets/candidate-lifecycle.svg)
+
+*Candidate construction, feasibility, and request validity are separate
+stages. In particular, solver indeterminacy produces explicit incompleteness;
+it is neither an invalid request nor evidence that a path is infeasible.*
 
 The solver boundary accepts typed symbolic parameters and one Boolean
 condition. The current Z3 adapter:

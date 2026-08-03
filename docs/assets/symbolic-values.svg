@@ -1,0 +1,121 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Structural XLS values over a shared typed expression DAG</title>
+  <desc id="desc">A recursive tuple and array value stores references at its bits leaves. Several leaves share the same typed expression node in an interned arena. Stable InputLeaf identities name arguments structurally, while SMT variable names appear only during serialization.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .value { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+      .aggregate { fill: #e0f2fe; stroke: #0284c7; stroke-width: 2; }
+      .expr { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .identity { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+      .serialization { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; }
+      .zero { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 7 5; }
+      .title { font: 700 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .heading { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1px; fill: #334155; }
+      .label { font: 650 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .tiny { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 500 14px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #0f172a; }
+      .mono-small { font: 500 13px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #334155; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+      .ref { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="720" rx="18"/>
+  <text class="title" x="40" y="46">XLS shape stays structural; bit expressions are shared</text>
+  <text class="subtitle" x="40" y="73">Tuples and arrays are ordinary finite trees, while their bit leaves reference a typed interned DAG.</text>
+
+  <rect class="panel" x="40" y="96" width="350" height="548" rx="16"/>
+  <text class="heading" x="64" y="127">SYMBOLIC VALUE TREE</text>
+  <text class="small" x="64" y="154">Example output: ([x + y, x], x + y)</text>
+
+  <rect class="aggregate" x="130" y="182" width="170" height="54" rx="12"/>
+  <text class="label" x="215" y="207" text-anchor="middle">Tuple</text>
+  <text class="small" x="215" y="227" text-anchor="middle">2 ordered elements</text>
+
+  <path class="edge" d="M182 236 L132 286"/>
+  <path class="edge" d="M248 236 L295 286"/>
+
+  <rect class="aggregate" x="64" y="286" width="136" height="68" rx="12"/>
+  <text class="label" x="132" y="312" text-anchor="middle">Array[2]</text>
+  <text class="small" x="132" y="337" text-anchor="middle">ordered elements</text>
+
+  <rect class="value" x="224" y="286" width="142" height="68" rx="12"/>
+  <text class="label" x="295" y="312" text-anchor="middle">Bits[8]</text>
+  <text class="mono" x="295" y="337" text-anchor="middle">ExprRef e3</text>
+
+  <path class="edge" d="M111 354 L135 407"/>
+  <path class="edge" d="M153 354 L295 407"/>
+
+  <rect class="value" x="64" y="407" width="142" height="68" rx="12"/>
+  <text class="label" x="135" y="433" text-anchor="middle">Bits[8]</text>
+  <text class="mono" x="135" y="458" text-anchor="middle">ExprRef e3</text>
+
+  <rect class="value" x="224" y="407" width="142" height="68" rx="12"/>
+  <text class="label" x="295" y="433" text-anchor="middle">Bits[8]</text>
+  <text class="mono" x="295" y="458" text-anchor="middle">ExprRef e1</text>
+
+  <rect class="zero" x="64" y="538" width="302" height="38" rx="10"/>
+  <text class="small" x="215" y="562" text-anchor="middle">Bits[0] stays structural; no invalid SMT node</text>
+
+  <rect class="panel" x="415" y="96" width="390" height="548" rx="16"/>
+  <text class="heading" x="439" y="127">TYPED INTERNED EXPRESSION DAG</text>
+  <text class="small" x="439" y="154">References share nodes; they do not copy expressions.</text>
+
+  <rect class="expr" x="454" y="192" width="132" height="74" rx="12"/>
+  <text class="label" x="520" y="219" text-anchor="middle">e1 · Param</text>
+  <text class="mono-small" x="520" y="243" text-anchor="middle">x : bits[8]</text>
+
+  <rect class="expr" x="636" y="192" width="132" height="74" rx="12"/>
+  <text class="label" x="702" y="219" text-anchor="middle">e2 · Param</text>
+  <text class="mono-small" x="702" y="243" text-anchor="middle">y : bits[8]</text>
+
+  <path class="edge" d="M520 266 L570 342"/>
+  <path class="edge" d="M702 266 L650 342"/>
+
+  <rect class="expr" x="538" y="342" width="144" height="80" rx="12"/>
+  <text class="label" x="610" y="371" text-anchor="middle">e3 · Add</text>
+  <text class="mono-small" x="610" y="395" text-anchor="middle">e1 + e2 : bits[8]</text>
+
+  <rect class="panel" x="454" y="470" width="314" height="126" rx="12"/>
+  <text class="label" x="611" y="501" text-anchor="middle">arena invariants</text>
+  <text class="small" x="475" y="528">• every node carries its XLS bit width</text>
+  <text class="small" x="475" y="551">• equal nodes are deterministically shared</text>
+  <text class="small" x="475" y="574">• concrete folding happens before solving</text>
+
+  <path class="ref" d="M366 320 C430 320 470 380 538 380"/>
+  <path class="ref" d="M135 475 C236 524 430 430 538 394"/>
+  <path class="ref" d="M366 441 C402 398 410 232 454 232"/>
+
+  <rect class="panel" x="830" y="96" width="330" height="548" rx="16"/>
+  <text class="heading" x="854" y="127">STABLE IDENTITY, LATE SERIALIZATION</text>
+
+  <rect class="identity" x="862" y="174" width="266" height="112" rx="13"/>
+  <text class="label" x="995" y="204" text-anchor="middle">InputLeaf identities</text>
+  <text class="mono-small" x="995" y="233" text-anchor="middle">argument 0  →  x</text>
+  <text class="mono-small" x="995" y="258" text-anchor="middle">argument 1  →  y</text>
+
+  <path class="edge" d="M995 286 L995 328"/>
+  <rect class="identity" x="862" y="328" width="266" height="92" rx="13"/>
+  <text class="label" x="995" y="358" text-anchor="middle">typed caller constraint</text>
+  <text class="mono" x="995" y="389" text-anchor="middle">x &lt;u y</text>
+
+  <path class="edge" d="M995 420 L995 462"/>
+  <rect class="serialization" x="862" y="462" width="266" height="116" rx="13"/>
+  <text class="label" x="995" y="492" text-anchor="middle">SMT-LIB serialization</text>
+  <text class="mono-small" x="995" y="521" text-anchor="middle">(_ bv...) · p0 · p1</text>
+  <text class="small" x="995" y="550" text-anchor="middle">rendered names are private</text>
+
+  <text class="small" x="862" y="610">Public APIs refer to XLS structure,</text>
+  <text class="small" x="862" y="631">not a particular solver's variable names.</text>
+
+  <rect x="240" y="671" width="720" height="30" rx="15" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text class="label" x="600" y="692" text-anchor="middle">SMT-LIB serializes the expression model; it is not the source of truth.</text>
+</svg>
