@@ -202,14 +202,14 @@ fn lower_node(
                 .iter()
                 .map(|arg| term(*arg))
                 .collect::<Result<Vec<_>, _>>()?;
-            fold_terms(solver, &args, Solver::and)?
+            solver.and_many(args.iter().collect())
         }
         ExprKind::BoolOr(args) => {
             let args = args
                 .iter()
                 .map(|arg| term(*arg))
                 .collect::<Result<Vec<_>, _>>()?;
-            fold_terms(solver, &args, Solver::or)?
+            solver.or_many(args.iter().collect())
         }
         ExprKind::BitUnary(op, arg) => match op {
             BitUnaryOp::Not => solver.not(&term(*arg)?),
@@ -257,7 +257,7 @@ fn lower_node(
                 .iter()
                 .map(|arg| term(*arg))
                 .collect::<Result<Vec<_>, _>>()?;
-            fold_terms(solver, &args, Solver::concat)?
+            solver.concat_many(args.iter().collect())
         }
         ExprKind::Extract { arg, start, width } => solver.slice(&term(*arg)?, *start, *width),
         ExprKind::Extend {
@@ -277,23 +277,6 @@ fn lower_node(
         )));
     }
     Ok(result)
-}
-
-fn fold_terms(
-    solver: &mut EasySmtSolver,
-    terms: &[BitVec<EasySmtTerm>],
-    operation: fn(
-        &mut EasySmtSolver,
-        &BitVec<EasySmtTerm>,
-        &BitVec<EasySmtTerm>,
-    ) -> BitVec<EasySmtTerm>,
-) -> Result<BitVec<EasySmtTerm>, XlsynthError> {
-    let (first, rest) = terms
-        .split_first()
-        .ok_or_else(|| solver_error("n-ary arena expression has no operands"))?;
-    Ok(rest.iter().fold(first.clone(), |result, term| {
-        operation(solver, &result, term)
-    }))
 }
 
 fn solver_error(message: impl Into<String>) -> XlsynthError {
