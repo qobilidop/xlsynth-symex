@@ -159,11 +159,11 @@ canonical selection trace.
 
 ## Performance expectations
 
-Symbolic construction is generally small compared with solver work. The
-current adapter starts a fresh Z3 process for each candidate, so runtime grows
-roughly with the number and difficulty of guard queries, while selection
-combinations can grow exponentially. Release-mode Rust optimization therefore
-has little effect on solver-dominated workloads.
+Symbolic construction is generally small compared with solver work. Enumeration
+lowers the expression arena once into a persistent Z3 session and checks each
+candidate in an incremental solver scope. Runtime therefore grows primarily
+with the number and difficulty of guard queries, while selection combinations
+can grow exponentially.
 
 The executable v1 smoke test enumerates 64 `one_hot_sel` masks under a
 30-second ceiling. This is a bounded release guard, not a general scalability

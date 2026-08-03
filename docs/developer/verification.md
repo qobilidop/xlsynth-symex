@@ -126,15 +126,15 @@ seconds. The container cgroup peak was 1,768,996,864 bytes, including incrementa
 compilation and the entire test suite; it is not evaluator-only memory.
 
 The executable selection stress case enumerates all 64 masks of a six-case
-`one_hot_sel`. Three warm release runs completed in 6.620, 6.627, and 7.639
-seconds. The median run spent 3 ms constructing the expression graph and 6.610
-seconds across 64 solver queries. The test enforces a conservative 30-second
+`one_hot_sel`. After migration to the persistent upstream solver session, three
+warm runs completed in 265, 265, and 269 milliseconds. The median run spent 6 ms
+constructing the expression graph and 237 ms starting the session, lowering the
+arena, and checking 64 solver queries. The test retains a conservative 30-second
 ceiling in the supported container.
 
 These observations are reproducible baselines, not cross-machine promises or
-general scaling claims. Starting a fresh Z3 process per candidate dominates the
-measurement. Users should inspect per-request statistics and the performance
-guidance in the [`user guide`](../user/guide.md).
+general scaling claims. Users should inspect per-request statistics and the
+performance guidance in the [`user guide`](../user/guide.md).
 
 ## Release gate
 

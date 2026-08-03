@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Z3 process adapter and the minimal model parser used by selection enumeration.
+//! Persistent upstream-solver session used by selection enumeration.
 //!
-//! The adapter captures all process output. Solver-specific syntax remains
-//! behind this module; callers supply typed constraints through the public API.
+//! The symbolic arena remains backend-neutral. This module lowers it once into
+//! the solver terms maintained by `xlsynth-prover`, then checks every candidate
+//! guard incrementally with a balanced push/pop scope.
 
-use std::collections::BTreeMap;
-use std::fmt::Write as _;
-use std::io::Write as _;
-use std::process::{Command, Stdio};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use xlsynth::{IrBits, XlsynthError};
+use xlsynth_pir::ir::Type;
+use xlsynth_prover::solver::easy_smt::{EasySmtConfig, EasySmtSolver};
+use xlsynth_prover::solver::{BitVec, Response, Solver};
 
 use crate::SymbolicParameter;
+use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, ExprKind, Sort};
+
+type EasySmtTerm = <EasySmtSolver as Solver>::Term;
 
 pub(crate) enum Satisfiability {
     Sat(BTreeMap<String, IrBits>),
@@ -21,326 +25,328 @@ pub(crate) enum Satisfiability {
     Indeterminate(String),
 }
 
-/// Checks one guard and returns a complete arbitrary-width input model.
-pub(crate) fn solve(
-    parameters: &[SymbolicParameter],
-    guard: &str,
-    timeout: Duration,
-) -> Result<Satisfiability, XlsynthError> {
-    let timeout_ms = u64::try_from(timeout.as_millis())
-        .unwrap_or(u64::MAX)
-        .max(1);
-    let mut query = String::from("(set-option :produce-models true)\n");
-    writeln!(query, "(set-option :timeout {timeout_ms})").expect("writing to a String cannot fail");
-    for parameter in parameters {
-        writeln!(
-            query,
-            "(declare-const {} (_ BitVec {}))",
-            parameter.name, parameter.bit_count
-        )
-        .expect("writing to a String cannot fail");
-    }
-    writeln!(query, "(assert {guard})").expect("writing to a String cannot fail");
-    query.push_str("(check-sat)\n");
-    query.push_str("(get-info :reason-unknown)\n");
-    if !parameters.is_empty() {
-        query.push_str("(get-value (");
-        query.push_str(
-            &parameters
-                .iter()
-                .map(|parameter| parameter.name.as_str())
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
-        query.push_str("))\n");
-    }
+/// One persistent solver and the complete lowering of an expression arena.
+pub(crate) struct SolverSession<'a> {
+    solver: EasySmtSolver,
+    terms: HashMap<ExprId, BitVec<EasySmtTerm>>,
+    parameter_terms: BTreeMap<String, BitVec<EasySmtTerm>>,
+    parameters: &'a [SymbolicParameter],
+}
 
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .arg(format!("-t:{timeout_ms}"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| XlsynthError(format!("xlsynth-symex: failed to start z3: {error}")))?;
-    child
-        .stdin
-        .take()
-        .expect("piped z3 stdin must be present")
-        .write_all(query.as_bytes())
-        .map_err(|error| {
-            XlsynthError(format!("xlsynth-symex: failed to write z3 query: {error}"))
-        })?;
-    let output = child.wait_with_output().map_err(|error| {
-        XlsynthError(format!(
-            "xlsynth-symex: failed to collect z3 result: {error}"
-        ))
-    })?;
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|error| XlsynthError(format!("xlsynth-symex: z3 output is not UTF-8: {error}")))?;
-    let expressions = parse_sexpressions(&stdout)?;
-    let Some(status) = expressions.first().and_then(Sexp::as_atom) else {
-        return Ok(Satisfiability::Indeterminate(format!(
-            "z3 returned no status: {stdout:?}"
-        )));
-    };
-    // Z3 4.8 exits nonzero when the unconditional get-value follows unsat or
-    // unknown. Those statuses are already authoritative; sat additionally
-    // requires a clean exit and a complete model below.
-    match status {
-        "unsat" => Ok(Satisfiability::Unsat),
-        "unknown" => Ok(Satisfiability::Indeterminate(format!(
-            "z3 returned unknown: {}",
-            reason_unknown(expressions.get(1)).unwrap_or("reason unavailable")
-        ))),
-        "sat" if !output.status.success() => Ok(Satisfiability::Indeterminate(format!(
-            "z3 exited with {} after reporting sat: stdout={stdout:?}, stderr={:?}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))),
-        "sat" => {
-            if parameters.is_empty() {
-                return Ok(Satisfiability::Sat(BTreeMap::new()));
-            }
-            let Some(Sexp::List(bindings)) = expressions.get(2) else {
-                return Ok(Satisfiability::Indeterminate(format!(
-                    "z3 omitted model values: {stdout:?}"
+impl<'a> SolverSession<'a> {
+    /// Starts Z3 once and lowers every arena node into the upstream solver API.
+    pub(crate) fn new(
+        arena: &ExprArena,
+        parameters: &'a [SymbolicParameter],
+        timeout: Duration,
+    ) -> Result<Self, XlsynthError> {
+        let timeout_ms = u64::try_from(timeout.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let mut config = EasySmtConfig::z3();
+        // Z3 documents `-t` as a per-query soft timeout, so it remains valid
+        // across the incremental checks performed by this persistent process.
+        config.solver_args.push(format!("-t:{timeout_ms}"));
+        let mut solver = EasySmtSolver::new(&config)
+            .map_err(|error| solver_error(format!("failed to start z3: {error}")))?;
+        let mut terms = HashMap::with_capacity(arena.node_count());
+        let mut variables = HashMap::new();
+
+        for (id, sort, kind) in arena.nodes() {
+            let term = lower_node(&mut solver, arena, &terms, id, sort, kind)?;
+            if let ExprKind::Variable(name) = kind
+                && variables.insert(name.clone(), term.clone()).is_some()
+            {
+                return Err(solver_error(format!(
+                    "arena declares variable {name:?} more than once"
                 )));
-            };
-            let widths = parameters
-                .iter()
-                .map(|parameter| (parameter.name.as_str(), parameter.bit_count))
-                .collect::<BTreeMap<_, _>>();
-            let mut model = BTreeMap::new();
-            for binding in bindings {
-                let Sexp::List(pair) = binding else {
-                    return model_error(&stdout, "model binding is not a list");
-                };
-                if pair.len() != 2 {
-                    return model_error(&stdout, "model binding is not a pair");
+            }
+            terms.insert(id, term);
+        }
+
+        let parameter_terms = parameters
+            .iter()
+            .map(|parameter| {
+                let term = variables.get(&parameter.name).cloned().ok_or_else(|| {
+                    solver_error(format!(
+                        "symbolic parameter {:?} has no arena variable",
+                        parameter.name
+                    ))
+                })?;
+                if term.get_width() != parameter.bit_count {
+                    return Err(solver_error(format!(
+                        "symbolic parameter {:?} has solver width {}, expected {}",
+                        parameter.name,
+                        term.get_width(),
+                        parameter.bit_count
+                    )));
                 }
-                let Some(name) = pair[0].as_atom() else {
-                    return model_error(&stdout, "model binding name is not an atom");
-                };
-                let Some(width) = widths.get(name).copied() else {
-                    return model_error(&stdout, "model contains an unknown parameter");
-                };
-                model.insert(name.to_owned(), parse_bit_vector(&pair[1], width)?);
-            }
-            if model.len() != parameters.len() {
-                return model_error(&stdout, "model omitted a symbolic parameter");
-            }
-            Ok(Satisfiability::Sat(model))
+                Ok((parameter.name.clone(), term))
+            })
+            .collect::<Result<_, XlsynthError>>()?;
+
+        Ok(Self {
+            solver,
+            terms,
+            parameter_terms,
+            parameters,
+        })
+    }
+
+    /// Checks one arena guard and returns a complete arbitrary-width model.
+    pub(crate) fn solve(&mut self, guard: ExprId) -> Result<Satisfiability, XlsynthError> {
+        let guard = self
+            .terms
+            .get(&guard)
+            .cloned()
+            .ok_or_else(|| solver_error("guard is absent from the lowered arena"))?;
+        if guard.get_width() != 1 {
+            return Err(solver_error("guard did not lower to bits[1]"));
         }
-        other => Ok(Satisfiability::Indeterminate(format!(
-            "unexpected z3 status {other:?}"
-        ))),
+
+        self.solver
+            .push()
+            .map_err(|error| solver_error(format!("failed to push solver scope: {error}")))?;
+        let result = self.solve_in_scope(&guard);
+        let popped = self
+            .solver
+            .pop()
+            .map_err(|error| solver_error(format!("failed to pop solver scope: {error}")));
+        match (result, popped) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Err(error), Ok(())) | (_, Err(error)) => Err(error),
+        }
+    }
+
+    fn solve_in_scope(
+        &mut self,
+        guard: &BitVec<EasySmtTerm>,
+    ) -> Result<Satisfiability, XlsynthError> {
+        self.solver
+            .assert(guard)
+            .map_err(|error| solver_error(format!("failed to assert guard: {error}")))?;
+        match self
+            .solver
+            .check()
+            .map_err(|error| solver_error(format!("failed to check guard: {error}")))?
+        {
+            Response::Unsat => Ok(Satisfiability::Unsat),
+            Response::Unknown => Ok(Satisfiability::Indeterminate(
+                "solver returned unknown or reached its per-query timeout".to_owned(),
+            )),
+            Response::Sat => {
+                let mut model = BTreeMap::new();
+                for parameter in self.parameters {
+                    let term = self
+                        .parameter_terms
+                        .get(&parameter.name)
+                        .expect("validated parameter term must be present");
+                    let value = self
+                        .solver
+                        .get_value(term, &Type::Bits(parameter.bit_count))
+                        .map_err(|error| {
+                            solver_error(format!(
+                                "failed to read model value for {:?}: {error}",
+                                parameter.name
+                            ))
+                        })?;
+                    let bits = value.to_bits().map_err(|error| {
+                        solver_error(format!(
+                            "model value for {:?} is not bits-typed: {error}",
+                            parameter.name
+                        ))
+                    })?;
+                    model.insert(parameter.name.clone(), bits);
+                }
+                Ok(Satisfiability::Sat(model))
+            }
+        }
     }
 }
 
-fn reason_unknown(expression: Option<&Sexp>) -> Option<&str> {
-    let Sexp::List(parts) = expression? else {
-        return None;
+fn lower_node(
+    solver: &mut EasySmtSolver,
+    arena: &ExprArena,
+    terms: &HashMap<ExprId, BitVec<EasySmtTerm>>,
+    id: ExprId,
+    sort: Sort,
+    kind: &ExprKind,
+) -> Result<BitVec<EasySmtTerm>, XlsynthError> {
+    let term = |id: ExprId| {
+        terms
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| solver_error("arena node is not in dependency order"))
     };
-    if parts.first()?.as_atom()? != ":reason-unknown" {
-        return None;
-    }
-    parts
-        .get(1)?
-        .as_atom()
-        .map(|reason| reason.trim_matches('"'))
-}
-
-fn model_error<T>(stdout: &str, message: &str) -> Result<T, XlsynthError> {
-    Err(XlsynthError(format!(
-        "xlsynth-symex: {message} in z3 output {stdout:?}"
-    )))
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Sexp {
-    Atom(String),
-    List(Vec<Sexp>),
-}
-
-impl Sexp {
-    fn as_atom(&self) -> Option<&str> {
-        match self {
-            Self::Atom(atom) => Some(atom),
-            Self::List(_) => None,
+    let result = match kind {
+        ExprKind::BoolConst(true) => solver.true_bv(),
+        ExprKind::BoolConst(false) => solver.false_bv(),
+        ExprKind::BitsConst(_) => {
+            let Sort::Bits(width) = sort else {
+                return Err(solver_error("bit-vector constant has Boolean sort"));
+            };
+            solver.from_raw_str(width, &arena.to_smtlib(id))
         }
-    }
-}
-
-/// Parses the restricted S-expression subset emitted by generated Z3 queries.
-fn parse_sexpressions(text: &str) -> Result<Vec<Sexp>, XlsynthError> {
-    let tokens = tokenize(text);
-    let mut index = 0;
-    let mut result = Vec::new();
-    while index < tokens.len() {
-        result.push(parse_one(&tokens, &mut index)?);
+        ExprKind::Variable(name) => {
+            let width = match sort {
+                Sort::Bool => 1,
+                Sort::Bits(width) => width,
+            };
+            solver
+                .declare(name, width)
+                .map_err(|error| solver_error(format!("failed to declare {name:?}: {error}")))?
+        }
+        ExprKind::BoolNot(arg) => solver.not(&term(*arg)?),
+        ExprKind::BoolAnd(args) => {
+            let args = args
+                .iter()
+                .map(|arg| term(*arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            fold_terms(solver, &args, Solver::and)?
+        }
+        ExprKind::BoolOr(args) => {
+            let args = args
+                .iter()
+                .map(|arg| term(*arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            fold_terms(solver, &args, Solver::or)?
+        }
+        ExprKind::BitUnary(op, arg) => match op {
+            BitUnaryOp::Not => solver.not(&term(*arg)?),
+            BitUnaryOp::Neg => solver.neg(&term(*arg)?),
+        },
+        ExprKind::BitBinary(op, lhs, rhs) => {
+            let lhs = term(*lhs)?;
+            let rhs = term(*rhs)?;
+            match op {
+                BitBinaryOp::Add => solver.add(&lhs, &rhs),
+                BitBinaryOp::Sub => solver.sub(&lhs, &rhs),
+                BitBinaryOp::Mul => solver.mul(&lhs, &rhs),
+                BitBinaryOp::Udiv => solver.udiv(&lhs, &rhs),
+                BitBinaryOp::Sdiv => solver.sdiv(&lhs, &rhs),
+                BitBinaryOp::Urem => solver.urem(&lhs, &rhs),
+                BitBinaryOp::Srem => solver.srem(&lhs, &rhs),
+                BitBinaryOp::And => solver.and(&lhs, &rhs),
+                BitBinaryOp::Or => solver.or(&lhs, &rhs),
+                BitBinaryOp::Xor => solver.xor(&lhs, &rhs),
+                BitBinaryOp::Shl => solver.shl(&lhs, &rhs),
+                BitBinaryOp::Lshr => solver.lshr(&lhs, &rhs),
+                BitBinaryOp::Ashr => solver.ashr(&lhs, &rhs),
+            }
+        }
+        ExprKind::Compare(op, lhs, rhs) => {
+            let lhs = term(*lhs)?;
+            let rhs = term(*rhs)?;
+            match op {
+                CompareOp::Eq => solver.eq(&lhs, &rhs),
+                CompareOp::Ult => solver.ult(&lhs, &rhs),
+                CompareOp::Ule => solver.ule(&lhs, &rhs),
+                CompareOp::Ugt => solver.ugt(&lhs, &rhs),
+                CompareOp::Uge => solver.uge(&lhs, &rhs),
+                CompareOp::Slt => solver.slt(&lhs, &rhs),
+                CompareOp::Sle => solver.sle(&lhs, &rhs),
+                CompareOp::Sgt => solver.sgt(&lhs, &rhs),
+                CompareOp::Sge => solver.sge(&lhs, &rhs),
+            }
+        }
+        ExprKind::Ite(condition, then_id, else_id) => {
+            solver.ite(&term(*condition)?, &term(*then_id)?, &term(*else_id)?)
+        }
+        ExprKind::Concat(args) => {
+            let args = args
+                .iter()
+                .map(|arg| term(*arg))
+                .collect::<Result<Vec<_>, _>>()?;
+            fold_terms(solver, &args, Solver::concat)?
+        }
+        ExprKind::Extract { arg, start, width } => solver.slice(&term(*arg)?, *start, *width),
+        ExprKind::Extend {
+            arg,
+            signed,
+            amount,
+        } => solver.extend(&term(*arg)?, *amount, *signed),
+    };
+    let expected_width = match sort {
+        Sort::Bool => 1,
+        Sort::Bits(width) => width,
+    };
+    if result.get_width() != expected_width {
+        return Err(solver_error(format!(
+            "lowered arena node has width {}, expected {expected_width}",
+            result.get_width()
+        )));
     }
     Ok(result)
 }
 
-fn tokenize(text: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut start = None;
-    for (index, character) in text.char_indices() {
-        if character == '(' || character == ')' || character.is_whitespace() {
-            if let Some(start) = start.take() {
-                result.push(&text[start..index]);
-            }
-            if character == '(' || character == ')' {
-                result.push(&text[index..index + 1]);
-            }
-        } else if start.is_none() {
-            start = Some(index);
-        }
-    }
-    if let Some(start) = start {
-        result.push(&text[start..]);
-    }
-    result
+fn fold_terms(
+    solver: &mut EasySmtSolver,
+    terms: &[BitVec<EasySmtTerm>],
+    operation: fn(
+        &mut EasySmtSolver,
+        &BitVec<EasySmtTerm>,
+        &BitVec<EasySmtTerm>,
+    ) -> BitVec<EasySmtTerm>,
+) -> Result<BitVec<EasySmtTerm>, XlsynthError> {
+    let (first, rest) = terms
+        .split_first()
+        .ok_or_else(|| solver_error("n-ary arena expression has no operands"))?;
+    Ok(rest.iter().fold(first.clone(), |result, term| {
+        operation(solver, &result, term)
+    }))
 }
 
-fn parse_one(tokens: &[&str], index: &mut usize) -> Result<Sexp, XlsynthError> {
-    let Some(token) = tokens.get(*index).copied() else {
-        return Err(XlsynthError(
-            "xlsynth-symex: unexpected end of solver S-expression".to_owned(),
-        ));
-    };
-    *index += 1;
-    if token == "(" {
-        let mut children = Vec::new();
-        while tokens.get(*index).copied() != Some(")") {
-            children.push(parse_one(tokens, index)?);
-        }
-        *index += 1;
-        Ok(Sexp::List(children))
-    } else if token == ")" {
-        Err(XlsynthError(
-            "xlsynth-symex: unmatched ')' in solver output".to_owned(),
-        ))
-    } else {
-        Ok(Sexp::Atom(token.to_owned()))
-    }
-}
-
-fn parse_bit_vector(value: &Sexp, width: usize) -> Result<IrBits, XlsynthError> {
-    if let Some(atom) = value.as_atom() {
-        if let Some(binary) = atom.strip_prefix("#b") {
-            return bits_from_radix(binary, 1, width);
-        }
-        if let Some(hex) = atom.strip_prefix("#x") {
-            return bits_from_radix(hex, 4, width);
-        }
-    }
-    if let Sexp::List(parts) = value
-        && parts.len() == 3
-        && parts[0].as_atom() == Some("_")
-        && parts[2].as_atom() == Some(&width.to_string())
-        && let Some(decimal) = parts[1].as_atom().and_then(|atom| atom.strip_prefix("bv"))
-    {
-        return bits_from_decimal(decimal, width);
-    }
-    Err(XlsynthError(format!(
-        "xlsynth-symex: unsupported z3 bit-vector value {value:?} for bits[{width}]"
-    )))
-}
-
-fn bits_from_radix(text: &str, digit_width: usize, width: usize) -> Result<IrBits, XlsynthError> {
-    let mut bits = Vec::with_capacity(text.len() * digit_width);
-    for character in text.chars().rev() {
-        let digit = character.to_digit(1_u32 << digit_width).ok_or_else(|| {
-            XlsynthError(format!("xlsynth-symex: invalid model digit {character:?}"))
-        })?;
-        for bit in 0..digit_width {
-            bits.push(digit & (1 << bit) != 0);
-        }
-    }
-    bits.resize(width, false);
-    bits.truncate(width);
-    Ok(IrBits::from_lsb_is_0(&bits))
-}
-
-fn bits_from_decimal(text: &str, width: usize) -> Result<IrBits, XlsynthError> {
-    let mut bits = vec![false; width];
-    for character in text.chars() {
-        let digit = character.to_digit(10).ok_or_else(|| {
-            XlsynthError(format!("xlsynth-symex: invalid model decimal {text:?}"))
-        })?;
-        let mut carry = digit;
-        for bit in &mut bits {
-            let value = u32::from(*bit) * 10 + carry;
-            *bit = value & 1 != 0;
-            carry = value >> 1;
-        }
-        if carry != 0 {
-            return Err(XlsynthError(format!(
-                "xlsynth-symex: model value {text} does not fit bits[{width}]"
-            )));
-        }
-    }
-    Ok(IrBits::from_lsb_is_0(&bits))
+fn solver_error(message: impl Into<String>) -> XlsynthError {
+    XlsynthError(format!("xlsynth-symex solver: {}", message.into()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InputLeaf;
+    use xlsynth::IrValue;
 
     #[test]
-    fn parses_z3_models_at_non_nibble_and_wide_widths() {
+    fn solves_wide_models_and_reuses_the_session() {
+        let mut arena = ExprArena::default();
+        let x = arena.variable("x", Sort::Bits(5));
+        let wide = arena.variable("wide", Sort::Bits(80));
+        let x_value = arena.bits_const_u64(5, 21);
+        let wide_bits = IrValue::parse_typed("bits[80]:0x1234_5678_9abc_def0_1234")
+            .unwrap()
+            .to_bits()
+            .unwrap();
+        let wide_value = arena.bits_const(&wide_bits);
+        let x_equal = arena.compare(CompareOp::Eq, x, x_value);
+        let wide_equal = arena.compare(CompareOp::Eq, wide, wide_value);
+        let sat_guard = arena.bool_and([x_equal, wide_equal]);
+        let not_x_equal = arena.bool_not(x_equal);
+        let unsat_guard = arena.bool_and([x_equal, not_x_equal]);
         let parameters = vec![
             SymbolicParameter {
-                input: crate::InputLeaf::argument(0),
+                input: InputLeaf::argument(0),
                 name: "x".to_owned(),
                 bit_count: 5,
             },
             SymbolicParameter {
-                input: crate::InputLeaf::argument(1),
+                input: InputLeaf::argument(1),
                 name: "wide".to_owned(),
                 bit_count: 80,
             },
         ];
-        let Satisfiability::Sat(model) = solve(
-            &parameters,
-            "(and (= x #b10101) (= wide #x123456789abcdef01234))",
-            Duration::from_secs(10),
-        )
-        .unwrap() else {
+        let mut session = SolverSession::new(&arena, &parameters, Duration::from_secs(10)).unwrap();
+
+        let Satisfiability::Sat(model) = session.solve(sat_guard).unwrap() else {
             panic!("constraint must be satisfiable");
         };
         assert_eq!(model["x"].to_u64().unwrap(), 21);
-        assert_eq!(model["wide"].get_bit_count(), 80);
         assert_eq!(
             model["wide"].to_string(),
             "bits[80]:0x1234_5678_9abc_def0_1234"
         );
-    }
-
-    #[test]
-    fn reports_unsatisfiable_constraints() {
-        let parameters = vec![SymbolicParameter {
-            input: crate::InputLeaf::argument(0),
-            name: "x".to_owned(),
-            bit_count: 1,
-        }];
         assert!(matches!(
-            solve(
-                &parameters,
-                "(and (= x #b0) (= x #b1))",
-                Duration::from_secs(10)
-            )
-            .unwrap(),
+            session.solve(unsat_guard).unwrap(),
             Satisfiability::Unsat
         ));
-    }
-
-    #[test]
-    fn extracts_the_solver_unknown_reason() {
-        let expressions = parse_sexpressions("unknown\n(:reason-unknown \"timeout\")\n").unwrap();
-
-        assert_eq!(reason_unknown(expressions.get(1)), Some("timeout"));
     }
 }

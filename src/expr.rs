@@ -97,7 +97,7 @@ impl CompareOp {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum ExprKind {
+pub(crate) enum ExprKind {
     BoolConst(bool),
     BitsConst(Vec<u8>),
     Variable(String),
@@ -140,6 +140,14 @@ impl ExprArena {
 
     pub(crate) fn sort(&self, id: ExprId) -> Sort {
         self.nodes[id.0].sort
+    }
+
+    /// Visits every interned node in dependency-before-user order.
+    pub(crate) fn nodes(&self) -> impl Iterator<Item = (ExprId, Sort, &ExprKind)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (ExprId(index), node.sort, &node.kind))
     }
 
     pub(crate) fn bool_const(&mut self, value: bool) -> ExprId {

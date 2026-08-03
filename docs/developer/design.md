@@ -286,21 +286,24 @@ it is neither an invalid request nor evidence that a candidate is infeasible.*
 The solver boundary accepts typed symbolic parameters and one Boolean guard.
 The current Z3 adapter:
 
-1. serializes declarations and the guard to deterministic SMT-LIB;
-2. starts Z3 with a per-query timeout;
-3. distinguishes `sat`, `unsat`, and indeterminate results;
-4. parses model values for every symbolic leaf; and
-5. rebuilds complete recursive `IrValue` arguments by combining model leaves
+1. lowers the backend-neutral expression arena once through the pinned
+   `xlsynth-prover::solver::Solver` interface;
+2. maintains one EasySMT-backed Z3 process with a per-query timeout;
+3. checks each candidate in a balanced incremental push/pop scope;
+4. distinguishes `sat`, `unsat`, and indeterminate results;
+5. reads model values for every symbolic leaf through the upstream solver API;
+   and
+6. rebuilds complete recursive `IrValue` arguments by combining model leaves
    with caller-supplied concrete values.
 
 Solver indeterminacy changes enumeration completeness rather than becoming a
 semantic error or a false infeasibility result. Malformed IR, invalid input
 shapes, ill-typed constraints, and invalid model reconstruction remain errors.
 
-Starting a process per candidate keeps the adapter simple and isolated but
-dominates current selection-enumeration time. A persistent or incremental adapter
-can replace it without changing public values, constraints, or completeness
-semantics.
+The persistent session removes process startup from individual candidate
+queries without changing public values, constraints, or completeness semantics.
+The expression DAG and public constraint language remain solver-independent;
+only the private lowering and session layer depends on the selected backend.
 
 ## Merged and enumerated evaluation
 
@@ -336,9 +339,9 @@ candidate solving; it is an output and completeness limit rather than an
 execution budget. Changing that behavior requires an explicit ordering and
 early-termination contract.
 
-The main optional extensions are incremental or parallel solving, stronger
-expression simplification, known-bit propagation, additional solver adapters,
-and opt-in selection policies for symbolic data selectors. None changes the pure
+The main optional extensions are parallel solving, stronger expression
+simplification, known-bit propagation, additional upstream solver backends, and
+opt-in selection policies for symbolic data selectors. None changes the pure
 function boundary. Procs, hardware timing, general memory, and whole-machine
 execution remain separate concerns rather than future obligations of this
 library.

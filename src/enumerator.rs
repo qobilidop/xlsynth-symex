@@ -14,13 +14,14 @@ use xlsynth::{IrBits, IrValue, XlsynthError};
 use xlsynth_pir::ir::{Fn, NodePayload, NodeRef, Package, Type};
 use xlsynth_pir::ir_parser::Parser;
 use xlsynth_pir::ir_utils::operands;
+use xlsynth_pir::ir_value_utils::ir_bits_to_usize;
 
 use crate::evaluator::{
     BitsValue, Value, apply_pure_node, bits, bits_expr, deep_or, evaluation_input,
     materialize_value, selector_equals, symbolic_input, symex_error, zero_value,
 };
 use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
-use crate::solver::{self, Satisfiability};
+use crate::solver::{Satisfiability, SolverSession};
 use crate::{
     ConstraintComparison, ConstraintTerm, EnumerationCompleteness, EnumerationOptions,
     EnumerationResult, EnumerationStatistics, EvaluationInput, Guard, GuardedResult,
@@ -351,12 +352,38 @@ fn solve_candidates(
     let mut solver_queries = 0;
     let mut infeasible_candidates = 0;
     let mut solver_time = Duration::ZERO;
+    if candidates.is_empty() {
+        return Ok(SolvedCandidates {
+            results,
+            completeness,
+            solver_queries,
+            infeasible_candidates,
+            solver_time,
+        });
+    }
+    let solver_started = Instant::now();
+    let solver = SolverSession::new(context.arena, context.parameters, context.timeout);
+    solver_time += solver_started.elapsed();
+    let mut solver = match solver {
+        Ok(solver) => solver,
+        Err(error) => {
+            return Ok(SolvedCandidates {
+                results,
+                completeness: EnumerationCompleteness::Incomplete(IncompleteReason::Solver(
+                    error.to_string(),
+                )),
+                solver_queries,
+                infeasible_candidates,
+                solver_time,
+            });
+        }
+    };
 
     for candidate in candidates {
         let guard = context.arena.to_smtlib(candidate.state.guard);
         solver_queries += 1;
         let solver_started = Instant::now();
-        let solved = solver::solve(context.parameters, &guard, context.timeout);
+        let solved = solver.solve(candidate.state.guard);
         solver_time += solver_started.elapsed();
         let model = match solved {
             Ok(Satisfiability::Sat(model)) => model,
@@ -535,7 +562,7 @@ impl SelectionEvaluator<'_> {
             let selector = as_bits(&selected.value, "sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
                 self.concrete_selections += 1;
-                let index = bits_to_usize(&concrete);
+                let index = ir_bits_to_usize(&concrete);
                 let outcome = index
                     .filter(|index| *index < cases.len())
                     .map_or(SelectionOutcome::Default, SelectionOutcome::Case);
@@ -931,7 +958,7 @@ fn concrete_sel_case(
     cases: &[NodeRef],
     default: Option<NodeRef>,
 ) -> Result<NodeRef, XlsynthError> {
-    let index = bits_to_usize(selector);
+    let index = ir_bits_to_usize(selector);
     if let Some(case) = index.and_then(|index| cases.get(index)).copied() {
         Ok(case)
     } else if let Some(default) = default {
@@ -1013,20 +1040,6 @@ fn equality_guard(
     index: usize,
 ) -> Result<ExprId, XlsynthError> {
     selector_equals(arena, selector, index)
-}
-
-fn bits_to_usize(bits: &IrBits) -> Option<usize> {
-    let mut result = 0_usize;
-    for index in 0..bits.get_bit_count() {
-        if !bits.get_bit(index).unwrap() {
-            continue;
-        }
-        if index >= usize::BITS as usize {
-            return None;
-        }
-        result |= 1_usize << index;
-    }
-    Some(result)
 }
 
 fn induction_value(

@@ -60,7 +60,7 @@ changes as well.
 - `src/evaluator.rs`: merged symbolic evaluation and pure operation semantics.
 - `src/enumerator.rs`: selection enumeration, trace policy, solving, and witnesses.
 - `src/expr.rs`: typed interned bit-vector expression DAG and SMT rendering.
-- `src/solver.rs`: Z3 process adapter and model parsing.
+- `src/solver.rs`: expression lowering and the persistent upstream-solver session.
 - `src/lib.rs`: public types, options, results, and entry points.
 - `tests/`: semantic, differential, selection, mutation, corpus, and release checks.
 - `tests/corpus/curated/`: pinned upstream fixtures and executable manifests.

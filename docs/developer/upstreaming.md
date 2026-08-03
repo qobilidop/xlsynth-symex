@@ -80,9 +80,10 @@ mechanical code move:
 1. Select the destination crate or module and public ownership boundary.
 2. Decide whether the expression DAG and selection model are public reusable types
    or implementation details of one evaluator crate.
-3. Decide whether the solver adapter remains an external Z3 process, consumes
-   an injected solver interface, or reuses an upstream facility. Preserve typed
-   constraints and explicit solver indeterminacy either way.
+3. Review whether the current EasySMT-backed Z3 session should remain the
+   selected `xlsynth-prover::solver::Solver` implementation or use another
+   upstream backend. Preserve typed constraints and explicit solver
+   indeterminacy either way.
 4. Review `xlsynth-pir` extensions or representation gaps separately from the
    symbolic evaluator so each layer has clear ownership.
 5. Define which corpus, mutation, and bounded performance tests belong in
