@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # xlsynth-crate-revision	92bc9b932981c776bb4bb197cd6b6726f17ec090
 # status values: supported, partial, gap, excluded
 # operation	status	note	coverage

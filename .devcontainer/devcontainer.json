@@ -1,4 +1,5 @@
 {
+  "_spdx": "SPDX-License-Identifier: Apache-2.0",
   "name": "xlsynth-symex",
   "image": "ghcr.io/qobilidop/xlsynth-symex/dev:main",
   "workspaceFolder": "/workspace/xlsynth-symex",

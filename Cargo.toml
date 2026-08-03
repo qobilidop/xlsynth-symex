@@ -7,13 +7,18 @@ edition = "2024"
 license = "Apache-2.0"
 description = "Symbolic evaluation and exhaustive path generation for pure XLS functions"
 repository = "https://github.com/qobilidop/xlsynth-symex"
+documentation = "https://docs.rs/xlsynth-symex"
+homepage = "https://github.com/qobilidop/xlsynth-symex"
+readme = "README.md"
 
 [dependencies]
 xlsynth = { git = "https://github.com/xlsynth/xlsynth-crate", rev = "92bc9b932981c776bb4bb197cd6b6726f17ec090" }
 xlsynth-pir = { git = "https://github.com/xlsynth/xlsynth-crate", rev = "92bc9b932981c776bb4bb197cd6b6726f17ec090" }
 
 [lints.rust]
-missing_docs = "warn"
+missing_docs = "deny"
+unsafe_code = "forbid"
+warnings = "deny"
 
 [lints.clippy]
 all = "warn"

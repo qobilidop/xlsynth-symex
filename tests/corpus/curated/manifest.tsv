@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # id	repository	revision	source_path	fixture	module	function	argument_partition	required_features	license	fuzz_cases	fuzz_seed
 tiny_adder	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/tiny_adder.x	tiny_adder.x	tiny_adder	tiny_adder	all-symbolic,each-argument-concrete	bits,add,zero-extension	Apache-2.0	4	5eed000000000001
 nested_sel	https://github.com/xlsynth/xlsynth	12bb182e4d842228878d6caf5489df5565c81aa0	xls/examples/nested_sel.x	nested_sel.x	nested_sel	main	all-symbolic,each-argument-concrete	bits,compare,select	Apache-2.0	2048	5eed000000000002

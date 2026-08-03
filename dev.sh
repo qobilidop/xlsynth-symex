@@ -32,10 +32,13 @@ if ! docker image inspect "${image}" >/dev/null 2>&1; then
   fi
 fi
 
+mkdir -p "${repo_dir}/.cache/tmp"
+
 docker_args=(
   run --rm
   --platform linux/amd64
   --volume "${repo_dir}:/workspace/xlsynth-symex"
+  --volume "${repo_dir}/.cache/tmp:/tmp"
   --workdir /workspace/xlsynth-symex
   --env HOME=/tmp/xlsynth-symex-home
   --env CARGO_HOME=/workspace/xlsynth-symex/.cache/cargo

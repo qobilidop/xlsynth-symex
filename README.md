@@ -35,6 +35,13 @@ example.
 Run project commands in the checked-in development container:
 
 ```text
+./dev.sh ./scripts/check.sh
+```
+
+The complete check runs formatting, Clippy, tests, and rustdoc. Individual
+commands use the same wrapper when a shorter feedback loop is useful:
+
+```text
 ./dev.sh cargo test --workspace
 ./dev.sh cargo fmt --all -- --check
 ./dev.sh cargo clippy --workspace --all-targets -- -D warnings
@@ -53,5 +60,7 @@ checked-in development environment shared with CI.
 - [Support matrix](docs/support-matrix.tsv): the pinned operation inventory and
   executable coverage targets.
 - [Research](docs/research.md): prior art and evaluation sources.
+- [Upstreaming readiness](docs/upstreaming.md): adopted conventions and the
+  eventual workspace-integration boundary.
 - [Historical notes](docs/notes/): superseded design discussion and prototype
   records.

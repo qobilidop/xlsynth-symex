@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: ./dev.sh cargo fmt --all -- --check --color always
+        language: system
+        pass_filenames: false
+
+      - id: clippy
+        name: clippy
+        entry: ./dev.sh cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+
+      - id: repository-conventions
+        name: repository conventions
+        entry: ./dev.sh cargo test --test repository_conventions
+        language: system
+        pass_filenames: false
+
+      - id: rustdoc
+        name: rustdoc
+        entry: ./dev.sh ./scripts/check-docs.sh
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.17
+    hooks:
+      - id: mdformat
