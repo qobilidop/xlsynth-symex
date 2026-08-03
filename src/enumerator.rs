@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use xlsynth::{IrBits, IrValue, XlsynthError};
 use xlsynth_pir::ir::{Fn, NodePayload, NodeRef, Package, Type};
@@ -11,11 +12,13 @@ use crate::evaluator::{
     BitsValue, Value, apply_pure_node, bits, bits_expr, deep_or, evaluation_input,
     materialize_value, selector_equals, symbolic_input, symex_error, zero_value,
 };
-use crate::expr::{ExprArena, ExprId};
+use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
 use crate::solver::{self, Satisfiability};
 use crate::{
-    ChoiceId, ChoiceOutcome, EnumerationCompleteness, EnumerationOptions, EnumerationResult,
-    EvaluationInput, IncompleteReason, InvocationFrame, PathCondition, PathResult, PathWitness,
+    ChoiceId, ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
+    EnumerationOptions, EnumerationResult, EnumerationStatistics, EvaluationInput,
+    IncompleteReason, InputConstraint, InvocationFrame, PathCondition, PathResult, PathWitness,
+    SymbolicParameter,
 };
 
 const SYNTACTIC_PATH_SAFETY_LIMIT: usize = 1_000_000;
@@ -60,6 +63,7 @@ fn enumerate_parsed(
     inputs: Option<&[EvaluationInput]>,
     options: &EnumerationOptions,
 ) -> Result<EnumerationResult, XlsynthError> {
+    let construction_started = Instant::now();
     let function = package
         .get_fn(function_name)
         .ok_or_else(|| symex_error(format!("function {function_name:?} is absent from package")))?;
@@ -89,14 +93,19 @@ fn enumerate_parsed(
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let true_id = arena.bool_const(true);
+    let assumptions = options
+        .constraints
+        .iter()
+        .map(|constraint| lower_constraint(&mut arena, &parameters, constraint))
+        .collect::<Result<Vec<_>, _>>()?;
+    let initial_condition = arena.bool_and(assumptions);
     let frame = Frame {
         function,
         arguments,
         invocation: Vec::new(),
     };
     let initial = State {
-        condition: true_id,
+        condition: initial_condition,
         trace: BTreeMap::new(),
         cache: HashMap::new(),
     };
@@ -105,23 +114,43 @@ fn enumerate_parsed(
         arena: &mut arena,
         syntactic_paths: 1,
         incomplete: None,
+        evaluated_nodes: 0,
+        cache_hits: 0,
+        concrete_choices: 0,
+        symbolic_outcomes: 0,
     };
     let ret = function
         .ret_node_ref
         .ok_or_else(|| symex_error(format!("function {} has no return node", function.name)))?;
     let candidates = evaluator.eval_node(&frame, ret, initial)?;
-    let mut completeness = evaluator
-        .incomplete
+    let construction_time = construction_started.elapsed();
+    let evaluated_nodes = evaluator.evaluated_nodes;
+    let cache_hits = evaluator.cache_hits;
+    let concrete_choices = evaluator.concrete_choices;
+    let symbolic_outcomes = evaluator.symbolic_outcomes;
+    let incomplete = evaluator.incomplete.take();
+    drop(evaluator);
+    let mut completeness = incomplete
         .map(EnumerationCompleteness::Incomplete)
         .unwrap_or(EnumerationCompleteness::Complete);
 
     let mut paths = Vec::new();
     let mut seen_traces = HashSet::new();
+    let mut solver_queries = 0;
+    let mut infeasible_candidates = 0;
+    let mut solver_time = Duration::ZERO;
     for candidate in candidates {
         let condition = arena.to_smtlib(candidate.state.condition);
-        let model = match solver::solve(&parameters, &condition) {
+        solver_queries += 1;
+        let solver_started = Instant::now();
+        let solved = solver::solve(&parameters, &condition, options.solver_timeout);
+        solver_time += solver_started.elapsed();
+        let model = match solved {
             Ok(Satisfiability::Sat(model)) => model,
-            Ok(Satisfiability::Unsat) => continue,
+            Ok(Satisfiability::Unsat) => {
+                infeasible_candidates += 1;
+                continue;
+            }
             Ok(Satisfiability::Indeterminate(reason)) => {
                 completeness =
                     EnumerationCompleteness::Incomplete(IncompleteReason::Solver(reason));
@@ -169,7 +198,123 @@ fn enumerate_parsed(
         parameters,
         paths,
         completeness,
+        statistics: EnumerationStatistics {
+            expression_nodes: arena.node_count(),
+            evaluated_nodes,
+            cache_hits,
+            concrete_choices,
+            symbolic_outcomes,
+            solver_queries,
+            infeasible_candidates,
+            construction_time,
+            solver_time,
+        },
     })
+}
+
+fn lower_constraint(
+    arena: &mut ExprArena,
+    parameters: &[SymbolicParameter],
+    constraint: &InputConstraint,
+) -> Result<ExprId, XlsynthError> {
+    match constraint {
+        InputConstraint::Bool(value) => Ok(arena.bool_const(*value)),
+        InputConstraint::Not(inner) => {
+            let inner = lower_constraint(arena, parameters, inner)?;
+            Ok(arena.bool_not(inner))
+        }
+        InputConstraint::And(constraints) => {
+            let constraints = constraints
+                .iter()
+                .map(|constraint| lower_constraint(arena, parameters, constraint))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(arena.bool_and(constraints))
+        }
+        InputConstraint::Or(constraints) => {
+            let constraints = constraints
+                .iter()
+                .map(|constraint| lower_constraint(arena, parameters, constraint))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(arena.bool_or(constraints))
+        }
+        InputConstraint::Compare {
+            operation,
+            lhs,
+            rhs,
+        } => {
+            let lhs = lower_term(arena, parameters, lhs)?;
+            let rhs = lower_term(arena, parameters, rhs)?;
+            if arena.sort(lhs) != arena.sort(rhs) {
+                return Err(symex_error("constraint comparison width mismatch"));
+            }
+            let comparison = match operation {
+                ConstraintComparison::Equal | ConstraintComparison::NotEqual => CompareOp::Eq,
+                ConstraintComparison::UnsignedLessThan => CompareOp::Ult,
+                ConstraintComparison::UnsignedLessOrEqual => CompareOp::Ule,
+                ConstraintComparison::SignedLessThan => CompareOp::Slt,
+                ConstraintComparison::SignedLessOrEqual => CompareOp::Sle,
+            };
+            let result = arena.compare(comparison, lhs, rhs);
+            if *operation == ConstraintComparison::NotEqual {
+                Ok(arena.bool_not(result))
+            } else {
+                Ok(result)
+            }
+        }
+    }
+}
+
+fn lower_term(
+    arena: &mut ExprArena,
+    parameters: &[SymbolicParameter],
+    term: &ConstraintTerm,
+) -> Result<ExprId, XlsynthError> {
+    match term {
+        ConstraintTerm::Input(name) => {
+            let parameter = parameters
+                .iter()
+                .find(|parameter| parameter.name == *name)
+                .ok_or_else(|| {
+                    symex_error(format!("constraint names unknown input leaf {name:?}"))
+                })?;
+            Ok(arena.variable(name, Sort::Bits(parameter.bit_count)))
+        }
+        ConstraintTerm::Constant(value) => {
+            let bits = value
+                .to_bits()
+                .map_err(|_| symex_error("constraint constants must be bits-typed XLS values"))?;
+            if bits.get_bit_count() == 0 {
+                return Err(symex_error(
+                    "bits[0] constraint terms have no solver representation",
+                ));
+            }
+            Ok(arena.bits_const(&bits))
+        }
+        ConstraintTerm::Not(inner) => {
+            let inner = lower_term(arena, parameters, inner)?;
+            Ok(arena.bit_unary(BitUnaryOp::Not, inner))
+        }
+        ConstraintTerm::Add(lhs, rhs)
+        | ConstraintTerm::Sub(lhs, rhs)
+        | ConstraintTerm::And(lhs, rhs)
+        | ConstraintTerm::Or(lhs, rhs)
+        | ConstraintTerm::Xor(lhs, rhs) => {
+            let lhs_id = lower_term(arena, parameters, lhs)?;
+            let rhs_id = lower_term(arena, parameters, rhs)?;
+            if arena.sort(lhs_id) != arena.sort(rhs_id) {
+                return Err(symex_error("constraint term width mismatch"));
+            }
+            let operation = match term {
+                ConstraintTerm::Add(_, _) => BitBinaryOp::Add,
+                ConstraintTerm::Sub(_, _) => BitBinaryOp::Sub,
+                ConstraintTerm::And(_, _) => BitBinaryOp::And,
+                ConstraintTerm::Or(_, _) => BitBinaryOp::Or,
+                ConstraintTerm::Xor(_, _) => BitBinaryOp::Xor,
+                _ => unreachable!(),
+            };
+            Ok(arena.bit_binary(operation, lhs_id, rhs_id))
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -202,6 +347,10 @@ struct PathEvaluator<'a> {
     arena: &'a mut ExprArena,
     syntactic_paths: usize,
     incomplete: Option<IncompleteReason>,
+    evaluated_nodes: usize,
+    cache_hits: usize,
+    concrete_choices: usize,
+    symbolic_outcomes: usize,
 }
 
 impl PathEvaluator<'_> {
@@ -217,8 +366,10 @@ impl PathEvaluator<'_> {
             invocation: frame.invocation.clone(),
         };
         if let Some(value) = state.cache.get(&key).cloned() {
+            self.cache_hits += 1;
             return Ok(vec![Evaluated { state, value }]);
         }
+        self.evaluated_nodes += 1;
         let node = frame.function.get_node(node_ref);
         let mut evaluated = match &node.payload {
             NodePayload::Nil => return Err(symex_error("the nil node cannot be evaluated")),
@@ -322,11 +473,19 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
+                self.concrete_choices += 1;
+                let index = bits_to_usize(&concrete);
+                let outcome = index
+                    .filter(|index| *index < cases.len())
+                    .map_or(ChoiceOutcome::Default, ChoiceOutcome::Case);
                 let case_ref = concrete_sel_case(&concrete, cases, default)?;
-                results.extend(self.eval_node(frame, case_ref, selected.state)?);
+                let state =
+                    self.record_choice(selected.state, self.choice_id(frame, node_ref), outcome)?;
+                results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
             let outcomes = symbolic_sel_outcomes(self.arena, selector, cases, default)?;
+            self.symbolic_outcomes += outcomes.len();
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
@@ -356,18 +515,25 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "priority_sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
-                let case_ref = cases
+                self.concrete_choices += 1;
+                let selected_case = cases
                     .iter()
                     .enumerate()
                     .find(|(index, _)| {
                         *index < concrete.get_bit_count() && concrete.get_bit(*index).unwrap()
                     })
-                    .map(|(_, case_ref)| *case_ref)
-                    .unwrap_or(default);
-                results.extend(self.eval_node(frame, case_ref, selected.state)?);
+                    .map(|(index, case_ref)| (index, *case_ref));
+                let (outcome, case_ref) = selected_case
+                    .map_or((ChoiceOutcome::Default, default), |(index, case_ref)| {
+                        (ChoiceOutcome::Case(index), case_ref)
+                    });
+                let state =
+                    self.record_choice(selected.state, self.choice_id(frame, node_ref), outcome)?;
+                results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
             let outcomes = symbolic_priority_outcomes(self.arena, selector, cases, default)?;
+            self.symbolic_outcomes += outcomes.len();
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
@@ -396,19 +562,27 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "one_hot_sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
+                self.concrete_choices += 1;
+                let mask = (0..cases.len())
+                    .map(|index| {
+                        index < concrete.get_bit_count() && concrete.get_bit(index).unwrap()
+                    })
+                    .collect::<Vec<_>>();
                 let selected_cases = cases
                     .iter()
-                    .enumerate()
-                    .filter(|(index, _)| {
-                        *index < concrete.get_bit_count() && concrete.get_bit(*index).unwrap()
-                    })
-                    .map(|(_, case_ref)| *case_ref)
+                    .zip(&mask)
+                    .filter_map(|(case_ref, selected)| selected.then_some(*case_ref))
                     .collect::<Vec<_>>();
+                let state = self.record_choice(
+                    selected.state,
+                    self.choice_id(frame, node_ref),
+                    ChoiceOutcome::OneHotMask(mask),
+                )?;
                 results.extend(self.eval_deep_or_cases(
                     frame,
                     &selected_cases,
                     result_type,
-                    selected.state,
+                    state,
                 )?);
                 continue;
             }
@@ -416,6 +590,7 @@ impl PathEvaluator<'_> {
             let combination_count = 1_usize.checked_shl(relevant as u32);
             let available = SYNTACTIC_PATH_SAFETY_LIMIT.saturating_sub(self.syntactic_paths);
             let count = combination_count.unwrap_or(usize::MAX).min(available);
+            self.symbolic_outcomes += count;
             if combination_count.is_none_or(|total| total > available) && self.incomplete.is_none()
             {
                 let choice = self.choice_id(frame, node_ref);
@@ -600,7 +775,13 @@ impl PathEvaluator<'_> {
         outcome: ChoiceOutcome,
         guard: ExprId,
     ) -> Option<State> {
-        if self.incomplete.is_some() && self.syntactic_paths >= SYNTACTIC_PATH_SAFETY_LIMIT {
+        if self.syntactic_paths >= SYNTACTIC_PATH_SAFETY_LIMIT {
+            if self.incomplete.is_none() {
+                self.incomplete = Some(IncompleteReason::ResourceLimit {
+                    limit: SYNTACTIC_PATH_SAFETY_LIMIT,
+                    choice,
+                });
+            }
             return None;
         }
         if state.trace.insert(choice, outcome).is_some() {
@@ -612,6 +793,20 @@ impl PathEvaluator<'_> {
         }
         self.syntactic_paths = self.syntactic_paths.saturating_add(1);
         Some(state)
+    }
+
+    fn record_choice(
+        &self,
+        mut state: State,
+        choice: ChoiceId,
+        outcome: ChoiceOutcome,
+    ) -> Result<State, XlsynthError> {
+        if state.trace.insert(choice.clone(), outcome).is_some() {
+            return Err(symex_error(format!(
+                "choice {choice:?} was evaluated more than once in one path"
+            )));
+        }
+        Ok(state)
     }
 
     fn choice_id(&self, frame: &Frame<'_>, node_ref: NodeRef) -> ChoiceId {

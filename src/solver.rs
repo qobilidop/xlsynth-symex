@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use xlsynth::{IrBits, XlsynthError};
 
@@ -17,8 +18,13 @@ pub(crate) enum Satisfiability {
 pub(crate) fn solve(
     parameters: &[SymbolicParameter],
     condition: &str,
+    timeout: Duration,
 ) -> Result<Satisfiability, XlsynthError> {
-    let mut query = String::from("(set-option :produce-models true)\n");
+    let timeout_ms = u64::try_from(timeout.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    let mut query =
+        format!("(set-option :produce-models true)\n(set-option :timeout {timeout_ms})\n");
     for parameter in parameters {
         query.push_str(&format!(
             "(declare-const {} (_ BitVec {}))\n",
@@ -268,6 +274,7 @@ mod tests {
         let Satisfiability::Sat(model) = solve(
             &parameters,
             "(and (= x #b10101) (= wide #x123456789abcdef01234))",
+            Duration::from_secs(10),
         )
         .unwrap() else {
             panic!("constraint must be satisfiable");
@@ -287,7 +294,12 @@ mod tests {
             bit_count: 1,
         }];
         assert!(matches!(
-            solve(&parameters, "(and (= x #b0) (= x #b1))").unwrap(),
+            solve(
+                &parameters,
+                "(and (= x #b0) (= x #b1))",
+                Duration::from_secs(10)
+            )
+            .unwrap(),
             Satisfiability::Unsat
         ));
     }

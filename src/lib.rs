@@ -12,6 +12,7 @@ mod expr;
 mod solver;
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use xlsynth::{IrFunction, IrPackage, IrValue, XlsynthError};
 
@@ -147,14 +148,95 @@ pub enum EnumerationCompleteness {
     Incomplete(IncompleteReason),
 }
 
+/// Backend-neutral bit-vector term used in caller assumptions.
+#[derive(Clone, Debug)]
+pub enum ConstraintTerm {
+    /// A symbolic bits leaf named by [`SymbolicParameter::name`].
+    Input(String),
+    /// A bits-typed XLS constant.
+    Constant(IrValue),
+    /// Bitwise complement.
+    Not(Box<ConstraintTerm>),
+    /// Modular addition of equal-width terms.
+    Add(Box<ConstraintTerm>, Box<ConstraintTerm>),
+    /// Modular subtraction of equal-width terms.
+    Sub(Box<ConstraintTerm>, Box<ConstraintTerm>),
+    /// Bitwise conjunction of equal-width terms.
+    And(Box<ConstraintTerm>, Box<ConstraintTerm>),
+    /// Bitwise disjunction of equal-width terms.
+    Or(Box<ConstraintTerm>, Box<ConstraintTerm>),
+    /// Bitwise exclusive-or of equal-width terms.
+    Xor(Box<ConstraintTerm>, Box<ConstraintTerm>),
+}
+
+/// Comparison used by a caller-supplied input constraint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstraintComparison {
+    /// Equal bit patterns.
+    Equal,
+    /// Different bit patterns.
+    NotEqual,
+    /// Unsigned less than.
+    UnsignedLessThan,
+    /// Unsigned less than or equal.
+    UnsignedLessOrEqual,
+    /// Signed less than.
+    SignedLessThan,
+    /// Signed less than or equal.
+    SignedLessOrEqual,
+}
+
+/// Backend-neutral Boolean constraint over symbolic input leaves.
+#[derive(Clone, Debug)]
+pub enum InputConstraint {
+    /// Constant Boolean value.
+    Bool(bool),
+    /// Logical negation.
+    Not(Box<InputConstraint>),
+    /// Logical conjunction.
+    And(Vec<InputConstraint>),
+    /// Logical disjunction.
+    Or(Vec<InputConstraint>),
+    /// Equal-width bit-vector comparison.
+    Compare {
+        /// Comparison operation.
+        operation: ConstraintComparison,
+        /// Left-hand bit-vector term.
+        lhs: ConstraintTerm,
+        /// Right-hand bit-vector term.
+        rhs: ConstraintTerm,
+    },
+}
+
 /// Configuration for canonical path enumeration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EnumerationOptions {
     /// Optional maximum number of feasible paths to return.
     ///
     /// `None` performs uncapped exhaustive enumeration. Reaching a configured
     /// limit always reports [`EnumerationCompleteness::Incomplete`].
     pub max_paths: Option<usize>,
+    /// Caller assumptions conjoined with every path condition.
+    ///
+    /// Constraints refer to symbolic leaf names exposed by
+    /// [`SymbolicParameter::name`]. A completed result covers exactly the
+    /// domain satisfying these assumptions.
+    pub constraints: Vec<InputConstraint>,
+    /// Per-query solver timeout.
+    ///
+    /// A timeout produces an explicitly incomplete result. The default is ten
+    /// seconds per feasibility/model query.
+    pub solver_timeout: Duration,
+}
+
+impl Default for EnumerationOptions {
+    fn default() -> Self {
+        Self {
+            max_paths: None,
+            constraints: Vec::new(),
+            solver_timeout: Duration::from_secs(10),
+        }
+    }
 }
 
 /// Result of canonical path enumeration.
@@ -166,6 +248,31 @@ pub struct EnumerationResult {
     pub paths: Vec<PathResult>,
     /// Explicit full-coverage status.
     pub completeness: EnumerationCompleteness,
+    /// Measurements from constructing and solving this enumeration.
+    pub statistics: EnumerationStatistics,
+}
+
+/// Measurements for one canonical path-enumeration request.
+#[derive(Clone, Debug, Default)]
+pub struct EnumerationStatistics {
+    /// Unique nodes in the interned symbolic-expression DAG.
+    pub expression_nodes: usize,
+    /// Function nodes evaluated on cache misses across all path states.
+    pub evaluated_nodes: usize,
+    /// Function-node values reused from a path-local memoization cache.
+    pub cache_hits: usize,
+    /// Demanded choice sites resolved without symbolic forking.
+    pub concrete_choices: usize,
+    /// Symbolic choice outcomes constructed before feasibility pruning.
+    pub symbolic_outcomes: usize,
+    /// Feasibility and model queries issued to the solver.
+    pub solver_queries: usize,
+    /// Syntactic candidates rejected as infeasible by the solver.
+    pub infeasible_candidates: usize,
+    /// Time spent constructing symbolic candidates, excluding solver queries.
+    pub construction_time: Duration,
+    /// Aggregate wall time spent in solver queries.
+    pub solver_time: Duration,
 }
 
 /// One symbolic bits-typed function parameter.
@@ -270,6 +377,15 @@ pub fn evaluate_ir_package(
     evaluator::evaluate_package_text(package_ir, function_name)
 }
 
+/// Symbolically evaluates textual XLS/PIR package IR with mixed inputs.
+pub fn evaluate_ir_package_with_inputs(
+    package_ir: &str,
+    function_name: &str,
+    inputs: &[EvaluationInput],
+) -> Result<SymexResult, XlsynthError> {
+    evaluator::evaluate_package_text_with_inputs(package_ir, function_name, inputs)
+}
+
 /// Symbolically evaluates a package function with mixed concrete/symbolic inputs.
 pub fn evaluate_package_with_inputs(
     package: &IrPackage,
@@ -286,6 +402,14 @@ pub fn enumerate(function: &IrFunction) -> Result<EnumerationResult, XlsynthErro
         None,
         &EnumerationOptions::default(),
     )
+}
+
+/// Enumerates canonical paths through an all-symbolic leaf function with options.
+pub fn enumerate_with_options(
+    function: &IrFunction,
+    options: &EnumerationOptions,
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_function_text(&function.to_ir_string()?, None, options)
 }
 
 /// Enumerates canonical paths through a leaf function with mixed inputs.
@@ -322,6 +446,15 @@ pub fn enumerate_package(
     )
 }
 
+/// Enumerates an all-symbolic package function with explicit options.
+pub fn enumerate_package_with_options(
+    package: &IrPackage,
+    function_name: &str,
+    options: &EnumerationOptions,
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(&package.to_string(), function_name, None, options)
+}
+
 /// Enumerates a named function in textual XLS/PIR package IR.
 pub fn enumerate_ir_package(
     package_ir: &str,
@@ -335,6 +468,29 @@ pub fn enumerate_ir_package(
     )
 }
 
+/// Enumerates all-symbolic paths in textual XLS/PIR package IR with options.
+pub fn enumerate_ir_package_with_options(
+    package_ir: &str,
+    function_name: &str,
+    options: &EnumerationOptions,
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(package_ir, function_name, None, options)
+}
+
+/// Enumerates package-function paths with mixed inputs and default options.
+pub fn enumerate_package_with_inputs(
+    package: &IrPackage,
+    function_name: &str,
+    inputs: &[EvaluationInput],
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(
+        &package.to_string(),
+        function_name,
+        Some(inputs),
+        &EnumerationOptions::default(),
+    )
+}
+
 /// Enumerates package-function paths with mixed inputs and explicit options.
 pub fn enumerate_package_with_inputs_and_options(
     package: &IrPackage,
@@ -343,6 +499,16 @@ pub fn enumerate_package_with_inputs_and_options(
     options: &EnumerationOptions,
 ) -> Result<EnumerationResult, XlsynthError> {
     enumerator::enumerate_package_text(&package.to_string(), function_name, Some(inputs), options)
+}
+
+/// Enumerates textual package-function paths with mixed inputs and options.
+pub fn enumerate_ir_package_with_inputs_and_options(
+    package_ir: &str,
+    function_name: &str,
+    inputs: &[EvaluationInput],
+    options: &EnumerationOptions,
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(package_ir, function_name, Some(inputs), options)
 }
 
 #[cfg(test)]

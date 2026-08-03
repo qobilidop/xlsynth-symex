@@ -8,9 +8,10 @@ use std::process::{Command, Stdio};
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_symex::{
-    ChoiceOutcome, EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput,
-    IncompleteReason, PathResult, SymbolicValue, enumerate_package,
-    enumerate_package_with_inputs_and_options, enumerate_with_inputs, evaluate_package,
+    ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
+    EnumerationOptions, EnumerationResult, EvaluationInput, IncompleteReason, InputConstraint,
+    PathResult, SymbolicValue, enumerate_package, enumerate_package_with_inputs_and_options,
+    enumerate_package_with_options, enumerate_with_inputs, evaluate_package,
 };
 
 fn parse(ir: &str, function_name: &str) -> (IrPackage, xlsynth::IrFunction) {
@@ -114,6 +115,15 @@ fn assert_complete_partition(
     function_name: &str,
     enumerated: &EnumerationResult,
 ) {
+    assert_complete_partition_in_domain(package, function_name, enumerated, "true");
+}
+
+fn assert_complete_partition_in_domain(
+    package: &IrPackage,
+    function_name: &str,
+    enumerated: &EnumerationResult,
+    domain: &str,
+) {
     assert_eq!(enumerated.completeness, EnumerationCompleteness::Complete);
     let merged = evaluate_package(package, function_name).unwrap();
     assert_eq!(enumerated.parameters, merged.parameters);
@@ -168,8 +178,9 @@ fn assert_complete_partition(
         [only] => only.clone(),
         _ => format!("(and {})", implications.join(" ")),
     };
-    let query =
-        format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
+    let query = format!(
+        "{declarations}(assert (or (not (= {coverage} {domain})) (not {equivalence})))\n(check-sat)\n"
+    );
     let mut child = Command::new("z3")
         .arg("-in")
         .stdin(Stdio::piped())
@@ -236,6 +247,7 @@ top fn correlated(x: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3, c: bits[8] 
     assert_complete_partition(&package, "correlated", &result);
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
     assert_eq!(result.paths.len(), 2);
+    assert!(result.statistics.infeasible_candidates > 0);
     assert!(result.paths.iter().any(|path| path.trace.len() == 1));
     assert!(result.paths.iter().any(|path| path.trace.len() == 2));
     for path in &result.paths {
@@ -294,7 +306,7 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
 }
 
 #[test]
-fn concrete_selector_prunes_without_recording_a_choice() {
+fn concrete_selector_prunes_without_forking_and_records_its_outcome() {
     let ir = r#"package test
 
 top fn select(s: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
@@ -313,10 +325,54 @@ top fn select(s: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
     .unwrap();
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
     assert_eq!(result.paths.len(), 1);
-    assert!(result.paths[0].trace.is_empty());
+    assert_eq!(result.statistics.concrete_choices, 1);
+    assert_eq!(result.statistics.symbolic_outcomes, 0);
+    assert_eq!(result.statistics.solver_queries, 1);
+    assert_eq!(result.paths[0].trace.len(), 1);
+    assert_eq!(
+        outcomes(&result.paths),
+        BTreeSet::from([ChoiceOutcome::Case(1)])
+    );
     assert_eq!(
         result.paths[0].result.as_bits().unwrap().expression,
         "symex_arg_2"
+    );
+    assert_witness_replays(&function, &result.paths[0]);
+}
+
+#[test]
+fn concrete_priority_and_one_hot_choices_record_without_forking() {
+    let ir = r#"package test
+
+top fn choices(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b: bits[8] id=4, d: bits[8] id=5) -> (bits[8], bits[8]) {
+  p: bits[8] = priority_sel(priority, cases=[a, b], default=d, id=6)
+  o: bits[8] = one_hot_sel(mask, cases=[a, b], id=7)
+  ret result: (bits[8], bits[8]) = tuple(p, o, id=8)
+}
+"#;
+    let (_, function) = parse(ir, "choices");
+    let result = enumerate_with_inputs(
+        &function,
+        &[
+            EvaluationInput::Concrete(IrValue::make_ubits(2, 2).unwrap()),
+            EvaluationInput::Concrete(IrValue::make_ubits(2, 3).unwrap()),
+            EvaluationInput::Symbolic,
+            EvaluationInput::Symbolic,
+            EvaluationInput::Symbolic,
+        ],
+    )
+    .unwrap();
+    assert_eq!(result.completeness, EnumerationCompleteness::Complete);
+    assert_eq!(result.paths.len(), 1);
+    assert_eq!(result.paths[0].trace.len(), 2);
+    assert_eq!(result.statistics.concrete_choices, 2);
+    assert_eq!(result.statistics.symbolic_outcomes, 0);
+    assert_eq!(
+        outcomes(&result.paths),
+        BTreeSet::from([
+            ChoiceOutcome::Case(1),
+            ChoiceOutcome::OneHotMask(vec![true, true]),
+        ])
     );
     assert_witness_replays(&function, &result.paths[0]);
 }
@@ -405,7 +461,10 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
             EvaluationInput::Symbolic,
             EvaluationInput::Symbolic,
         ],
-        &EnumerationOptions { max_paths: Some(2) },
+        &EnumerationOptions {
+            max_paths: Some(2),
+            ..EnumerationOptions::default()
+        },
     )
     .unwrap();
     assert_eq!(result.paths.len(), 2);
@@ -413,6 +472,55 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
         result.completeness,
         EnumerationCompleteness::Incomplete(IncompleteReason::PathLimit { limit: 2 })
     );
+}
+
+#[test]
+fn caller_constraints_define_the_completed_input_domain() {
+    let ir = r#"package test
+
+top fn select(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4) -> bits[8] {
+  ret result: bits[8] = sel(s, cases=[a, b], default=d, id=5)
+}
+"#;
+    let (package, function) = parse(ir, "select");
+    let options = EnumerationOptions {
+        max_paths: None,
+        constraints: vec![InputConstraint::Compare {
+            operation: ConstraintComparison::UnsignedLessThan,
+            lhs: ConstraintTerm::Input("symex_arg_0".to_owned()),
+            rhs: ConstraintTerm::Constant(IrValue::make_ubits(2, 2).unwrap()),
+        }],
+        ..EnumerationOptions::default()
+    };
+    let result = enumerate_package_with_options(&package, "select", &options).unwrap();
+    assert_complete_partition_in_domain(
+        &package,
+        "select",
+        &result,
+        "(bvult symex_arg_0 (_ bv2 2))",
+    );
+    assert_eq!(result.completeness, EnumerationCompleteness::Complete);
+    assert_eq!(result.paths.len(), 2);
+    assert_eq!(
+        outcomes(&result.paths),
+        BTreeSet::from([ChoiceOutcome::Case(0), ChoiceOutcome::Case(1)])
+    );
+    for path in &result.paths {
+        assert!(path.witness.inputs[0].to_u64().unwrap() < 2);
+        assert_witness_replays(&function, path);
+    }
+
+    let invalid = EnumerationOptions {
+        max_paths: None,
+        constraints: vec![InputConstraint::Compare {
+            operation: ConstraintComparison::Equal,
+            lhs: ConstraintTerm::Input("missing".to_owned()),
+            rhs: ConstraintTerm::Constant(IrValue::make_ubits(2, 0).unwrap()),
+        }],
+        ..EnumerationOptions::default()
+    };
+    let error = enumerate_package_with_options(&package, "select", &invalid).unwrap_err();
+    assert!(error.to_string().contains("unknown input leaf \"missing\""));
 }
 
 #[test]

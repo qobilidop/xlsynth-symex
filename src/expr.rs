@@ -134,6 +134,10 @@ pub(crate) struct ExprArena {
 }
 
 impl ExprArena {
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub(crate) fn sort(&self, id: ExprId) -> Sort {
         self.nodes[id.0].sort
     }
