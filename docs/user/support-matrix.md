@@ -88,9 +88,9 @@ Pinned `xlsynth-crate` revision:
 
 | Operation | Semantics and limitations | Executable coverage |
 |---|---|---|
-| `sel` | Complete canonical case/default enumeration | `nested_selects_are_complete_and_structurally_inactive` |
-| `priority_sel` | Complete priority-resolved case/default enumeration | `priority_and_one_hot_outcomes_follow_v1_policy` |
-| `one_hot_sel` | Complete canonical selected-bitmask enumeration | `priority_and_one_hot_outcomes_follow_v1_policy` |
+| `sel` | Unsigned-index case/default enumeration | `selector_encodings_interpret_the_same_bits_differently` |
+| `priority_sel` | Complete lowest-index-priority case/default enumeration | `priority_and_one_hot_outcomes_follow_v1_policy` |
+| `one_hot_sel` | Complete selected-bitmask enumeration with recursive OR semantics | `selector_encodings_interpret_the_same_bits_differently` |
 
 ### `xlsynth-pir` extensions
 

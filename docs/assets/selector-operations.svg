@@ -1,0 +1,130 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="780" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
+  <title id="title">Three interpretations of the same XLS selector bits</title>
+  <desc id="desc">Given selector 0b101, cases C0 equals 0b0011, C1 equals 0b0101, C2 equals 0b1001, and default D equals 0b1111: sel treats 0b101 as numeric index 5 and chooses the out-of-range default; priority_sel treats set bits as requests and chooses case zero because the least-significant set bit has highest priority; one_hot_sel treats set bits as independent enables and returns the bitwise OR of cases zero and two, 0b1011. The corresponding canonical outcomes and guards are shown.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .index { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+      .priority { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .mask { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+      .neutral { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; }
+      .active { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; }
+      .winner { fill: #ffedd5; stroke: #c2410c; stroke-width: 2.5; }
+      .result { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+      .guard { fill: #faf5ff; stroke: #9333ea; stroke-width: 1.5; }
+      .title { font: 700 27px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .heading { font: 700 19px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .question { font: 650 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .label { font: 650 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .tiny { font: 500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .mono { font: 600 14px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #0f172a; }
+      .mono-small { font: 500 12px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #334155; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+      .soft-edge { fill: none; stroke: #94a3b8; stroke-width: 1.6; marker-end: url(#arrow); }
+      .or-edge { fill: none; stroke: #16a34a; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1400" height="780" rx="18"/>
+  <text class="title" x="40" y="46">Same bits, three different questions</text>
+  <text class="subtitle" x="40" y="73">All three operations are pure value selectors; the selector encoding determines what an outcome means.</text>
+
+  <rect class="panel" x="40" y="96" width="1320" height="100" rx="14"/>
+  <text class="question" x="64" y="126">SHARED CONCRETE INPUT</text>
+  <rect class="neutral" x="64" y="142" width="174" height="36" rx="18"/>
+  <text class="mono" x="151" y="165" text-anchor="middle">s = 0b101</text>
+  <rect class="neutral" x="288" y="142" width="174" height="36" rx="9"/>
+  <text class="mono" x="375" y="165" text-anchor="middle">C0 = 0b0011</text>
+  <rect class="neutral" x="482" y="142" width="174" height="36" rx="9"/>
+  <text class="mono" x="569" y="165" text-anchor="middle">C1 = 0b0101</text>
+  <rect class="neutral" x="676" y="142" width="174" height="36" rx="9"/>
+  <text class="mono" x="763" y="165" text-anchor="middle">C2 = 0b1001</text>
+  <rect class="neutral" x="900" y="142" width="174" height="36" rx="9"/>
+  <text class="mono" x="987" y="165" text-anchor="middle">D = 0b1111</text>
+  <text class="small" x="1120" y="157">Case indices and selector bits</text>
+  <text class="small" x="1120" y="176">are numbered from zero at the LSB.</text>
+
+  <rect class="panel" x="40" y="220" width="420" height="474" rx="16"/>
+  <rect class="index" x="62" y="242" width="376" height="54" rx="12"/>
+  <text class="heading" x="82" y="266">sel</text>
+  <text class="question" x="82" y="286">“Which numbered case?”</text>
+  <rect class="neutral" x="82" y="326" width="126" height="48" rx="10"/>
+  <text class="mono" x="145" y="356" text-anchor="middle">0b101</text>
+  <path class="edge" d="M208 350 L254 350"/>
+  <rect class="index" x="254" y="326" width="164" height="48" rx="10"/>
+  <text class="mono" x="336" y="347" text-anchor="middle">unsigned index</text>
+  <text class="mono" x="336" y="366" text-anchor="middle">5</text>
+  <text class="small" x="82" y="414">Valid case indices are 0, 1, and 2.</text>
+  <text class="small" x="82" y="438">Index 5 is out of range, so default D wins.</text>
+  <path class="edge" d="M250 454 L250 486"/>
+  <rect class="result" x="82" y="486" width="336" height="58" rx="11"/>
+  <text class="label" x="250" y="510" text-anchor="middle">result = D = 0b1111</text>
+  <text class="mono-small" x="250" y="532" text-anchor="middle">outcome: Default</text>
+  <rect class="guard" x="82" y="568" width="336" height="78" rx="11"/>
+  <text class="question" x="102" y="591">OUTCOME GUARD</text>
+  <text class="mono-small" x="102" y="616">s ≠ 0 ∧ s ≠ 1 ∧ s ≠ 2</text>
+  <text class="small" x="102" y="637">All out-of-range indices share this result.</text>
+  <text class="tiny" x="82" y="675">Set bits are merely digits of one unsigned number.</text>
+
+  <rect class="panel" x="490" y="220" width="420" height="474" rx="16"/>
+  <rect class="priority" x="512" y="242" width="376" height="54" rx="12"/>
+  <text class="heading" x="532" y="266">priority_sel</text>
+  <text class="question" x="532" y="286">“Which requested case wins?”</text>
+  <text class="tiny" x="540" y="324">bit 2</text>
+  <text class="tiny" x="638" y="324">bit 1</text>
+  <text class="tiny" x="736" y="324">bit 0 · highest priority</text>
+  <rect class="neutral" x="532" y="334" width="74" height="48" rx="10"/>
+  <text class="mono" x="569" y="363" text-anchor="middle">1</text>
+  <rect class="neutral" x="630" y="334" width="74" height="48" rx="10"/>
+  <text class="mono" x="667" y="363" text-anchor="middle">0</text>
+  <rect class="winner" x="728" y="334" width="138" height="48" rx="10"/>
+  <text class="mono" x="797" y="363" text-anchor="middle">1 → C0</text>
+  <path class="edge" d="M797 382 L797 420"/>
+  <text class="small" x="532" y="438">Bit 0 wins immediately; bit 2 is a don't-care.</text>
+  <path class="edge" d="M700 454 L700 486"/>
+  <rect class="result" x="532" y="486" width="336" height="58" rx="11"/>
+  <text class="label" x="700" y="510" text-anchor="middle">result = C0 = 0b0011</text>
+  <text class="mono-small" x="700" y="532" text-anchor="middle">outcome: Case(0)</text>
+  <rect class="guard" x="532" y="568" width="336" height="78" rx="11"/>
+  <text class="question" x="552" y="591">OUTCOME GUARD</text>
+  <text class="mono-small" x="552" y="616">s[0] = 1</text>
+  <text class="small" x="552" y="637">Higher-index bits do not affect the winner.</text>
+  <text class="tiny" x="532" y="675">Case i wins when bit i is set and every lower bit is clear.</text>
+
+  <rect class="panel" x="940" y="220" width="420" height="474" rx="16"/>
+  <rect class="mask" x="962" y="242" width="376" height="54" rx="12"/>
+  <text class="heading" x="982" y="266">one_hot_sel</text>
+  <text class="question" x="982" y="286">“Which enabled cases contribute?”</text>
+  <rect class="active" x="982" y="326" width="106" height="48" rx="10"/>
+  <text class="mono-small" x="1035" y="347" text-anchor="middle">s[0] = 1</text>
+  <text class="mono-small" x="1035" y="366" text-anchor="middle">C0 = 0011</text>
+  <rect class="neutral" x="1112" y="326" width="106" height="48" rx="10"/>
+  <text class="mono-small" x="1165" y="347" text-anchor="middle">s[1] = 0</text>
+  <text class="mono-small" x="1165" y="366" text-anchor="middle">disabled</text>
+  <rect class="active" x="1242" y="326" width="96" height="48" rx="10"/>
+  <text class="mono-small" x="1290" y="347" text-anchor="middle">s[2] = 1</text>
+  <text class="mono-small" x="1290" y="366" text-anchor="middle">C2 = 1001</text>
+  <path class="or-edge" d="M1035 374 C1035 414 1110 410 1124 446"/>
+  <path class="or-edge" d="M1290 374 C1290 414 1210 410 1196 446"/>
+  <rect class="mask" x="1100" y="434" width="120" height="40" rx="20"/>
+  <text class="mono" x="1160" y="459" text-anchor="middle">bitwise OR</text>
+  <path class="or-edge" d="M1160 474 L1160 486"/>
+  <rect class="result" x="982" y="486" width="336" height="58" rx="11"/>
+  <text class="label" x="1150" y="510" text-anchor="middle">result = C0 OR C2 = 0b1011</text>
+  <text class="mono-small" x="1150" y="532" text-anchor="middle">OneHotMask([true, false, true])</text>
+  <rect class="guard" x="982" y="568" width="336" height="78" rx="11"/>
+  <text class="question" x="1002" y="591">OUTCOME GUARD</text>
+  <text class="mono-small" x="1002" y="616">s = 0b101</text>
+  <text class="small" x="1002" y="637">Every selector bit is part of the mask identity.</text>
+  <text class="tiny" x="982" y="675">Despite its name, zero and multi-bit masks are well-defined.</text>
+
+  <rect x="174" y="718" width="1052" height="40" rx="20" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text class="label" x="700" y="743" text-anchor="middle">Numeric index · priority request vector · independent enable mask: similar wiring, different semantics and partition shapes.</text>
+</svg>

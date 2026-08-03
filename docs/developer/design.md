@@ -75,6 +75,63 @@ data-dependency edges; in conventional symbolic execution it usually denotes a
 sequence of control-flow decisions. Neither meaning describes a sparse map over
 possibly parallel XLS selection sites.
 
+## How the three selection operations differ
+
+`sel`, `priority_sel`, and `one_hot_sel` are all pure value operations, but
+their selector bits encode different questions. The distinction is defined by
+the [XLS IR semantics](https://google.github.io/xls/ir_semantics/#control-oriented-operations)
+and is preserved by both merged evaluation and selection enumeration.
+
+| Operation | Interpretation of the selector | If no case is indicated | If several bits are set | Canonical outcome |
+|---|---|---|---|---|
+| `sel` | The entire bit vector is one unsigned case index. | Index zero selects case 0; an out-of-range index selects the explicit default. | The bit pattern still denotes one numeric index; individual set bits have no separate meaning. | `Case(index)` or `Default` |
+| `priority_sel` | Bit `i` requests case `i`; lower indices have higher priority. | The required default is selected. | Only the lowest-index set bit wins. | `Case(index)` or `Default` |
+| `one_hot_sel` | Bit `i` independently enables case `i`. | The zero value of the result type is returned. | Every enabled case contributes through bitwise OR. | `OneHotMask`, including zero and multi-bit masks |
+
+For `sel`, the selector must be wide enough to represent every case index. An
+explicit default is required exactly when some selector values lie outside the
+case range; it is forbidden when the cases cover the entire selector domain.
+For `priority_sel` and `one_hot_sel`, selector width equals the number of cases.
+All cases, and any default, have the same result type.
+
+The name `one_hot_sel` does **not** impose a one-hot precondition. Its result is
+well-defined when zero, one, or several selector bits are set. For bits values,
+selected cases are bitwise-ORed. For tuples and arrays, the OR is applied
+recursively to corresponding bits leaves. Consequently, `priority_sel` and
+`one_hot_sel` agree when exactly one selector bit is set, but differ for both
+the all-zero and multi-bit cases.
+
+The following example uses the same selector and case values for all three
+operations. It demonstrates why visually similar selector wiring does not imply
+the same value or the same guard:
+
+![The same selector interpreted as a numeric index by sel, a priority request vector by priority_sel, and an enable mask by one_hot_sel](../assets/selector-operations.svg)
+
+With the values shown in the illustration, additional selector patterns make
+the distinction especially clear:
+
+| Selector | `sel` | `priority_sel` | `one_hot_sel` |
+|---|---|---|---|
+| `0b000` | `C0 = 0b0011` | `D = 0b1111` | zero, `0b0000` |
+| `0b010` | `C2 = 0b1001` | `C1 = 0b0101` | `C1 = 0b0101` |
+| `0b101` | out of range, so `D = 0b1111` | bit 0 wins, so `C0 = 0b0011` | `C0 OR C2 = 0b1011` |
+
+Selection enumeration follows those value semantics while choosing guards that
+describe the complete input region for each canonical outcome:
+
+- `sel` case `i` has guard `selector = i`; its default guard excludes every
+  in-range case index.
+- `priority_sel` case `i` requires bit `i` and excludes all lower-index,
+  higher-priority bits. Higher-index bits remain don't-cares. Its default guard
+  requires every selector bit to be zero.
+- `one_hot_sel` records the entire selected-case mask, so its guard fixes every
+  selector bit. An unconstrained `N`-bit selector can therefore produce up to
+  `2^N` canonical masks before feasibility pruning.
+
+Thus the enumerator treats all three operations as selection sites, but it does
+not force them into one generic branch rule. Each operation defines its own
+outcomes, guards, residual value, and potential enumeration cost.
+
 ## Dataflow, not control flow
 
 Consider a source-level conditional over one-bit `p`:

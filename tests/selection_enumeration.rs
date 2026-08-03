@@ -301,6 +301,61 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
 }
 
 #[test]
+fn selector_encodings_interpret_the_same_bits_differently() {
+    let ir = r#"package test
+
+top fn compare(
+    s: bits[3] id=1,
+    c0: bits[4] id=2,
+    c1: bits[4] id=3,
+    c2: bits[4] id=4,
+    d: bits[4] id=5
+) -> (bits[4], bits[4], bits[4]) {
+  indexed: bits[4] = sel(s, cases=[c0, c1, c2], default=d, id=6)
+  prioritized: bits[4] = priority_sel(s, cases=[c0, c1, c2], default=d, id=7)
+  masked: bits[4] = one_hot_sel(s, cases=[c0, c1, c2], id=8)
+  ret result: (bits[4], bits[4], bits[4]) = tuple(indexed, prioritized, masked, id=9)
+}
+"#;
+    let (_, function) = parse(ir, "compare");
+    let result = enumerate_with_inputs(
+        &function,
+        &[
+            EvaluationInput::Concrete(IrValue::make_ubits(3, 0b101).unwrap()),
+            EvaluationInput::Concrete(IrValue::make_ubits(4, 0b0011).unwrap()),
+            EvaluationInput::Concrete(IrValue::make_ubits(4, 0b0101).unwrap()),
+            EvaluationInput::Concrete(IrValue::make_ubits(4, 0b1001).unwrap()),
+            EvaluationInput::Concrete(IrValue::make_ubits(4, 0b1111).unwrap()),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(result.completeness, EnumerationCompleteness::Complete);
+    assert_eq!(result.results.len(), 1);
+    let guarded = &result.results[0];
+    assert_eq!(guarded.guard.as_smtlib(), "true");
+    assert_eq!(guarded.trace.len(), 3);
+    assert_eq!(
+        guarded.trace.values().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            SelectionOutcome::Default,
+            SelectionOutcome::Case(0),
+            SelectionOutcome::OneHotMask(vec![true, false, true]),
+        ])
+    );
+    let mut leaves = Vec::new();
+    guarded.result.flatten_bits(&mut leaves);
+    assert_eq!(
+        leaves
+            .iter()
+            .map(|leaf| leaf.expression.as_str())
+            .collect::<Vec<_>>(),
+        vec!["#b1111", "#b0011", "#b1011"]
+    );
+    assert_witness_replays(&function, guarded);
+}
+
+#[test]
 fn concrete_selector_prunes_without_forking_and_records_its_outcome() {
     let ir = r#"package test
 
