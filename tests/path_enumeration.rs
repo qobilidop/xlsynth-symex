@@ -8,9 +8,9 @@ use std::process::{Command, Stdio};
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_symex::{
-    ChoiceOutcome, EnumerationCompleteness, EnumerationOptions, EvaluationInput, IncompleteReason,
-    PathResult, SymbolicValue, enumerate_package, enumerate_package_with_inputs_and_options,
-    enumerate_with_inputs,
+    ChoiceOutcome, EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput,
+    IncompleteReason, PathResult, SymbolicValue, enumerate_package,
+    enumerate_package_with_inputs_and_options, enumerate_with_inputs, evaluate_package,
 };
 
 fn parse(ir: &str, function_name: &str) -> (IrPackage, xlsynth::IrFunction) {
@@ -109,6 +109,93 @@ fn outcomes(paths: &[PathResult]) -> BTreeSet<ChoiceOutcome> {
         .collect()
 }
 
+fn assert_complete_partition(
+    package: &IrPackage,
+    function_name: &str,
+    enumerated: &EnumerationResult,
+) {
+    assert_eq!(enumerated.completeness, EnumerationCompleteness::Complete);
+    let merged = evaluate_package(package, function_name).unwrap();
+    assert_eq!(enumerated.parameters, merged.parameters);
+    let declarations = enumerated
+        .parameters
+        .iter()
+        .map(|parameter| {
+            format!(
+                "(declare-const {} (_ BitVec {}))\n",
+                parameter.name, parameter.bit_count
+            )
+        })
+        .collect::<String>();
+    let coverage = match enumerated.paths.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.condition.as_smtlib().to_owned(),
+        _ => format!(
+            "(or {})",
+            enumerated
+                .paths
+                .iter()
+                .map(|path| path.condition.as_smtlib())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    let mut merged_leaves = Vec::new();
+    merged.result.flatten_bits(&mut merged_leaves);
+    let implications = enumerated
+        .paths
+        .iter()
+        .map(|path| {
+            let mut path_leaves = Vec::new();
+            path.result.flatten_bits(&mut path_leaves);
+            assert_eq!(path_leaves.len(), merged_leaves.len());
+            let equalities = path_leaves
+                .iter()
+                .zip(&merged_leaves)
+                .filter(|(path, _)| path.bit_count > 0)
+                .map(|(path, merged)| format!("(= {} {})", path.expression, merged.expression))
+                .collect::<Vec<_>>();
+            let equality = match equalities.as_slice() {
+                [] => "true".to_owned(),
+                [only] => only.clone(),
+                _ => format!("(and {})", equalities.join(" ")),
+            };
+            format!("(=> {} {equality})", path.condition.as_smtlib())
+        })
+        .collect::<Vec<_>>();
+    let equivalence = match implications.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.clone(),
+        _ => format!("(and {})", implications.join(" ")),
+    };
+    let query =
+        format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
+    let mut child = Command::new("z3")
+        .arg("-in")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(query.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "unsat",
+        "path domain is incomplete or piecewise result differs from merged evaluation\n{query}"
+    );
+}
+
 #[test]
 fn nested_selects_are_complete_and_structurally_inactive() {
     let ir = r#"package test
@@ -120,6 +207,7 @@ top fn nested(x: bits[1] id=1, y: bits[1] id=2, a: bits[8] id=3, b: bits[8] id=4
 "#;
     let (package, function) = parse(ir, "nested");
     let result = enumerate_package(&package, "nested").unwrap();
+    assert_complete_partition(&package, "nested", &result);
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
     assert_eq!(result.paths.len(), 3);
     let mut lengths = result
@@ -145,6 +233,7 @@ top fn correlated(x: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3, c: bits[8] 
 "#;
     let (package, function) = parse(ir, "correlated");
     let result = enumerate_package(&package, "correlated").unwrap();
+    assert_complete_partition(&package, "correlated", &result);
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
     assert_eq!(result.paths.len(), 2);
     assert!(result.paths.iter().any(|path| path.trace.len() == 1));
@@ -164,6 +253,7 @@ top fn priority(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id
 "#;
     let (priority_package, priority_function) = parse(priority_ir, "priority");
     let priority = enumerate_package(&priority_package, "priority").unwrap();
+    assert_complete_partition(&priority_package, "priority", &priority);
     assert_eq!(priority.completeness, EnumerationCompleteness::Complete);
     assert_eq!(priority.paths.len(), 3);
     assert_eq!(
@@ -186,6 +276,7 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
 "#;
     let (one_hot_package, one_hot_function) = parse(one_hot_ir, "one_hot");
     let one_hot = enumerate_package(&one_hot_package, "one_hot").unwrap();
+    assert_complete_partition(&one_hot_package, "one_hot", &one_hot);
     assert_eq!(one_hot.completeness, EnumerationCompleteness::Complete);
     assert_eq!(one_hot.paths.len(), 4);
     assert_eq!(
@@ -246,6 +337,7 @@ top fn invoke_twice(x: bits[1] id=5, y: bits[1] id=6, a: bits[8] id=7, b: bits[8
 "#;
     let (invoke_package, invoke_function) = parse(invoke_ir, "invoke_twice");
     let invoked = enumerate_package(&invoke_package, "invoke_twice").unwrap();
+    assert_complete_partition(&invoke_package, "invoke_twice", &invoked);
     assert_eq!(invoked.completeness, EnumerationCompleteness::Complete);
     assert_eq!(invoked.paths.len(), 4);
     for path in &invoked.paths {
@@ -277,6 +369,7 @@ top fn loop(s: bits[1] id=7, init: bits[8] id=8) -> bits[8] {
 "#;
     let (loop_package, loop_function) = parse(loop_ir, "loop");
     let looped = enumerate_package(&loop_package, "loop").unwrap();
+    assert_complete_partition(&loop_package, "loop", &looped);
     assert_eq!(looped.completeness, EnumerationCompleteness::Complete);
     assert_eq!(looped.paths.len(), 2);
     for path in &looped.paths {

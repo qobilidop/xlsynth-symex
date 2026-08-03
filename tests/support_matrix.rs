@@ -109,4 +109,10 @@ fn support_matrix_is_complete_and_well_formed() {
         "zero_ext",
     ];
     assert_eq!(entries.keys().copied().collect::<Vec<_>>(), expected);
+    assert!(
+        entries
+            .iter()
+            .all(|(_, status)| matches!(*status, "supported" | "excluded")),
+        "v1 operation matrix must not contain partial or gap rows: {entries:?}"
+    );
 }

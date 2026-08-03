@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use xlsynth::{IrValue, XlsynthError};
-use xlsynth_pir::ir::{Binop, Fn, NaryOp, Node, NodePayload, NodeRef, Package, Type, Unop};
+use xlsynth_pir::ir::{
+    Binop, Fn, NaryOp, Node, NodePayload, NodeRef, Package, PackageMember, Type, Unop,
+};
 use xlsynth_pir::ir_parser::Parser;
 
 use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
@@ -43,6 +45,7 @@ fn evaluate_function_text_with_optional_inputs(
         .map_err(|error| symex_error(format!("failed to parse XLS IR function: {error}")))?;
     xlsynth_pir::desugar_extensions::desugar_extensions_in_package(&mut package)
         .map_err(|error| symex_error(format!("failed to desugar extension operations: {error}")))?;
+    normalize_functions(&mut package);
     let function_name = package
         .get_top_fn()
         .ok_or_else(|| symex_error("standalone IR has no function"))?
@@ -76,7 +79,19 @@ fn evaluate_package_text_with_optional_inputs(
         .map_err(|error| symex_error(format!("failed to parse XLS IR package: {error}")))?;
     xlsynth_pir::desugar_extensions::desugar_extensions_in_package(&mut package)
         .map_err(|error| symex_error(format!("failed to desugar extension operations: {error}")))?;
+    normalize_functions(&mut package);
     evaluate_parsed(&package, function_name, inputs)
+}
+
+fn normalize_functions(package: &mut Package) {
+    for member in &mut package.members {
+        let function = match member {
+            PackageMember::Function(function) | PackageMember::Block { func: function, .. } => {
+                function
+            }
+        };
+        *function = xlsynth_pir::dce::remove_dead_nodes(function);
+    }
 }
 
 fn evaluate_parsed(
@@ -229,6 +244,7 @@ impl Evaluator<'_> {
                         bits_width(&node.ty)?,
                     )?)
                 }
+                NodePayload::Unop(Unop::Identity, arg) => get_value(&values, *arg)?.clone(),
                 NodePayload::Unop(op, arg) => Value::Bits(evaluate_unop(
                     self.arena,
                     *op,
@@ -400,8 +416,12 @@ pub(crate) fn apply_pure_node(
                 .ok_or_else(|| symex_error("array_slice does not support an empty array"))?;
             let mut result = Vec::with_capacity(*width);
             for offset in 0..*width {
-                let selector = add_index(arena, start, offset)?;
-                result.push(select_structural(arena, &selector, elements, Some(last))?);
+                let cases = (0..elements.len())
+                    .map(|start| {
+                        elements[start.saturating_add(offset).min(elements.len() - 1)].clone()
+                    })
+                    .collect::<Vec<_>>();
+                result.push(select_structural(arena, start, &cases, Some(last))?);
             }
             Value::Array(result)
         }
@@ -437,6 +457,12 @@ pub(crate) fn apply_pure_node(
                     "partial multiply tuple fields must be bits-typed",
                 ));
             };
+            if *result_width == 0 {
+                return Ok(Value::Tuple(vec![
+                    Value::Bits(bits(0, None)?),
+                    Value::Bits(bits(0, None)?),
+                ]));
+            }
             let signed = matches!(node.payload, NodePayload::Binop(Binop::Smulp, _, _));
             let lhs = resize(arena, lhs, *result_width, signed)?;
             let rhs = resize(arena, rhs, *result_width, signed)?;
@@ -455,6 +481,10 @@ pub(crate) fn apply_pure_node(
             };
             Value::Bits(evaluate_binop(arena, *op, lhs, rhs, bits_width(&node.ty)?)?)
         }
+        NodePayload::Unop(Unop::Identity, _) => operands
+            .first()
+            .cloned()
+            .ok_or_else(|| symex_error("identity operand is absent"))?,
         NodePayload::Unop(op, _) => {
             let [Value::Bits(arg)] = operands else {
                 return Err(symex_error("unary operand must be bits-typed"));
@@ -636,21 +666,6 @@ fn operand_bits<'a>(
     }
 }
 
-fn add_index(
-    arena: &mut ExprArena,
-    base: &BitsValue,
-    offset: usize,
-) -> Result<BitsValue, XlsynthError> {
-    if base.bit_count == 0 {
-        return bits(0, None);
-    }
-    let offset = arena.bits_const_u64(base.bit_count, offset as u64);
-    bits(
-        base.bit_count,
-        Some(arena.bit_binary(BitBinaryOp::Add, bits_expr(base)?, offset)),
-    )
-}
-
 fn dynamic_bit_slice(
     arena: &mut ExprArena,
     arg: &BitsValue,
@@ -660,12 +675,13 @@ fn dynamic_bit_slice(
     if width == 0 {
         return bits(0, None);
     }
-    let extended_width = arg
+    let zero_fill_width = arg
         .bit_count
         .checked_add(width)
         .ok_or_else(|| symex_error("dynamic bit-slice width overflow"))?;
-    let extended_arg = resize(arena, arg, extended_width, false)?;
-    let extended_start = resize(arena, start, extended_width, false)?;
+    let working_width = zero_fill_width.max(start.bit_count);
+    let extended_arg = resize(arena, arg, working_width, false)?;
+    let extended_start = resize(arena, start, working_width, false)?;
     let shifted = arena.bit_binary(
         BitBinaryOp::Lshr,
         bits_expr(&extended_arg)?,
@@ -933,6 +949,17 @@ fn evaluate_binop(
     rhs: &BitsValue,
     result_width: usize,
 ) -> Result<BitsValue, XlsynthError> {
+    if result_width == 0 {
+        return bits(0, None);
+    }
+    if lhs.bit_count == 0 || rhs.bit_count == 0 {
+        equal_widths(lhs, rhs)?;
+        let value = matches!(
+            op,
+            Binop::Eq | Binop::Uge | Binop::Ule | Binop::Sge | Binop::Sle
+        );
+        return bits(1, Some(arena.bits_const_u64(1, u64::from(value))));
+    }
     let expression = match op {
         Binop::Add => binary(arena, BitBinaryOp::Add, lhs, rhs)?,
         Binop::Sub => binary(arena, BitBinaryOp::Sub, lhs, rhs)?,
@@ -1237,7 +1264,16 @@ pub(crate) fn selector_equals(
     selector: &BitsValue,
     index: usize,
 ) -> Result<ExprId, XlsynthError> {
-    let index_expr = arena.bits_const_u64(selector.bit_count, index as u64);
+    if selector.bit_count == 0 {
+        return Ok(arena.bool_const(index == 0));
+    }
+    if selector.bit_count < usize::BITS as usize && index >= (1_usize << selector.bit_count) {
+        return Ok(arena.bool_const(false));
+    }
+    let value = (0..selector.bit_count)
+        .map(|bit| bit < usize::BITS as usize && index & (1_usize << bit) != 0)
+        .collect::<Vec<_>>();
+    let index_expr = arena.bits_const(&xlsynth::IrBits::from_lsb_is_0(&value));
     Ok(arena.compare(CompareOp::Eq, bits_expr(selector)?, index_expr))
 }
 
@@ -1330,8 +1366,16 @@ fn shift(
     lhs: &BitsValue,
     rhs: &BitsValue,
 ) -> Result<ExprId, XlsynthError> {
-    let rhs = resize(arena, rhs, lhs.bit_count, false)?;
-    Ok(arena.bit_binary(operation, bits_expr(lhs)?, bits_expr(&rhs)?))
+    let result_width = lhs.bit_count;
+    let working_width = lhs.bit_count.max(rhs.bit_count);
+    let lhs = resize(arena, lhs, working_width, operation == BitBinaryOp::Ashr)?;
+    let rhs = resize(arena, rhs, working_width, false)?;
+    let shifted = arena.bit_binary(operation, bits_expr(&lhs)?, bits_expr(&rhs)?);
+    if working_width == result_width {
+        Ok(shifted)
+    } else {
+        Ok(arena.extract(shifted, 0, result_width))
+    }
 }
 
 fn resize(

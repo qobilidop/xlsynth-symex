@@ -259,6 +259,17 @@ pub fn evaluate_package(
     evaluator::evaluate_package_text(&package.to_string(), function_name)
 }
 
+/// Symbolically evaluates a named function in textual XLS/PIR package IR.
+///
+/// This boundary also accepts the pinned `xlsynth-pir` extension operations,
+/// which are desugared to ordinary XLS value operations before evaluation.
+pub fn evaluate_ir_package(
+    package_ir: &str,
+    function_name: &str,
+) -> Result<SymexResult, XlsynthError> {
+    evaluator::evaluate_package_text(package_ir, function_name)
+}
+
 /// Symbolically evaluates a package function with mixed concrete/symbolic inputs.
 pub fn evaluate_package_with_inputs(
     package: &IrPackage,
@@ -305,6 +316,19 @@ pub fn enumerate_package(
 ) -> Result<EnumerationResult, XlsynthError> {
     enumerator::enumerate_package_text(
         &package.to_string(),
+        function_name,
+        None,
+        &EnumerationOptions::default(),
+    )
+}
+
+/// Enumerates a named function in textual XLS/PIR package IR.
+pub fn enumerate_ir_package(
+    package_ir: &str,
+    function_name: &str,
+) -> Result<EnumerationResult, XlsynthError> {
+    enumerator::enumerate_package_text(
+        package_ir,
         function_name,
         None,
         &EnumerationOptions::default(),

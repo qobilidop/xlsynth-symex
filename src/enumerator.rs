@@ -9,9 +9,9 @@ use xlsynth_pir::ir_utils::operands;
 
 use crate::evaluator::{
     BitsValue, Value, apply_pure_node, bits, bits_expr, deep_or, evaluation_input,
-    materialize_value, symbolic_input, symex_error, zero_value,
+    materialize_value, selector_equals, symbolic_input, symex_error, zero_value,
 };
-use crate::expr::{CompareOp, ExprArena, ExprId};
+use crate::expr::{ExprArena, ExprId};
 use crate::solver::{self, Satisfiability};
 use crate::{
     ChoiceId, ChoiceOutcome, EnumerationCompleteness, EnumerationOptions, EnumerationResult,
@@ -321,7 +321,7 @@ impl PathEvaluator<'_> {
         let mut results = Vec::new();
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "sel selector")?;
-            if let Some(concrete) = selector.expression.and_then(|id| self.arena.bits_value(id)) {
+            if let Some(concrete) = concrete_bits(self.arena, selector) {
                 let case_ref = concrete_sel_case(&concrete, cases, default)?;
                 results.extend(self.eval_node(frame, case_ref, selected.state)?);
                 continue;
@@ -355,7 +355,7 @@ impl PathEvaluator<'_> {
         let mut results = Vec::new();
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "priority_sel selector")?;
-            if let Some(concrete) = selector.expression.and_then(|id| self.arena.bits_value(id)) {
+            if let Some(concrete) = concrete_bits(self.arena, selector) {
                 let case_ref = cases
                     .iter()
                     .enumerate()
@@ -395,7 +395,7 @@ impl PathEvaluator<'_> {
         let mut results = Vec::new();
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "one_hot_sel selector")?;
-            if let Some(concrete) = selector.expression.and_then(|id| self.arena.bits_value(id)) {
+            if let Some(concrete) = concrete_bits(self.arena, selector) {
                 let selected_cases = cases
                     .iter()
                     .enumerate()
@@ -638,15 +638,20 @@ fn as_bits<'a>(value: &'a Value, description: &str) -> Result<&'a BitsValue, Xls
     }
 }
 
+fn concrete_bits(arena: &ExprArena, value: &BitsValue) -> Option<IrBits> {
+    if value.bit_count == 0 {
+        Some(IrBits::zero(0))
+    } else {
+        value.expression.and_then(|id| arena.bits_value(id))
+    }
+}
+
 fn concrete_sel_case(
     selector: &IrBits,
     cases: &[NodeRef],
     default: Option<NodeRef>,
 ) -> Result<NodeRef, XlsynthError> {
-    let index = selector
-        .to_u64()
-        .ok()
-        .and_then(|value| usize::try_from(value).ok());
+    let index = bits_to_usize(selector);
     if let Some(case) = index.and_then(|index| cases.get(index)).copied() {
         Ok(case)
     } else if let Some(default) = default {
@@ -665,14 +670,9 @@ fn symbolic_sel_outcomes(
     cases: &[NodeRef],
     default: Option<NodeRef>,
 ) -> Result<Vec<(ChoiceOutcome, ExprId, NodeRef)>, XlsynthError> {
-    let explicit_cases = if default.is_some() {
-        cases.len()
-    } else {
-        cases.len().saturating_sub(1)
-    };
-    let mut equalities = Vec::with_capacity(explicit_cases);
-    let mut outcomes = Vec::with_capacity(explicit_cases + 1);
-    for (index, case_ref) in cases.iter().copied().take(explicit_cases).enumerate() {
+    let mut equalities = Vec::with_capacity(cases.len());
+    let mut outcomes = Vec::with_capacity(cases.len() + 1);
+    for (index, case_ref) in cases.iter().copied().enumerate() {
         let guard = equality_guard(arena, selector, index)?;
         equalities.push(guard);
         outcomes.push((ChoiceOutcome::Case(index), guard, case_ref));
@@ -683,15 +683,12 @@ fn symbolic_sel_outcomes(
         let any_explicit = arena.bool_or(equalities);
         arena.bool_not(any_explicit)
     };
-    if let Some(default) = default {
-        outcomes.push((ChoiceOutcome::Default, fallback_guard, default));
-    } else {
-        let index = cases
-            .len()
-            .checked_sub(1)
-            .ok_or_else(|| symex_error("sel has no cases"))?;
-        outcomes.push((ChoiceOutcome::Case(index), fallback_guard, cases[index]));
-    }
+    let fallback_value = default.unwrap_or(
+        *cases
+            .last()
+            .ok_or_else(|| symex_error("sel has no cases"))?,
+    );
+    outcomes.push((ChoiceOutcome::Default, fallback_guard, fallback_value));
     Ok(outcomes)
 }
 
@@ -735,8 +732,21 @@ fn equality_guard(
     selector: &BitsValue,
     index: usize,
 ) -> Result<ExprId, XlsynthError> {
-    let constant = arena.bits_const_u64(selector.bit_count, index as u64);
-    Ok(arena.compare(CompareOp::Eq, bits_expr(selector)?, constant))
+    selector_equals(arena, selector, index)
+}
+
+fn bits_to_usize(bits: &IrBits) -> Option<usize> {
+    let mut result = 0_usize;
+    for index in 0..bits.get_bit_count() {
+        if !bits.get_bit(index).unwrap() {
+            continue;
+        }
+        if index >= usize::BITS as usize {
+            return None;
+        }
+        result |= 1_usize << index;
+    }
+    Some(result)
 }
 
 fn induction_value(

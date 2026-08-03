@@ -9,8 +9,9 @@ state in the repository README.
 
 ## Summary
 
-The repository implements a substantial merged symbolic-evaluation prototype.
-It does not yet implement the v1 path enumerator.
+The repository now implements the v1 symbolic value domain and canonical path
+enumerator. Release-evidence work remains before the repository can be tagged
+v1.
 
 ## Implemented
 
@@ -18,21 +19,27 @@ The evaluator currently:
 
 - parses function IR with `xlsynth-pir`;
 - exposes leaf-function and package-aware evaluation entry points;
-- creates recursively structured symbolic bits, tuple, and fixed-size array
-  values;
-- emits typed SMT-LIB bit-vector expressions;
-- supports core arithmetic and Boolean operations, reductions, comparisons,
-  extensions, static and dynamic bit slices, and merged `sel` expressions;
-- supports tuple construction/indexing, array construction, symbolic
-  one-dimensional array indexing/update, `one_hot`, and `encode`;
+- accepts concrete or symbolic values independently at recursively structured
+  input leaves;
+- represents bits and Boolean constraints with a typed, interned expression
+  DAG and emits deterministic SMT-LIB at the solver boundary;
+- supports all pinned in-scope pure value operations, including arbitrary- and
+  zero-width bits, nested arrays, structured gates and one-hot selects,
+  multidimensional indexing/update, and `xlsynth-pir` extension desugaring;
 - recursively evaluates pure function calls; and
 - evaluates `counted_for` with a static trip count by repeatedly applying its
-  pure body to a symbolic carry.
+  pure body to a symbolic carry;
+- demand-evaluates every feasible canonical `sel`, `priority_sel`, and
+  `one_hot_sel` path while pruning inactive case cones;
+- qualifies choice identities by callsite and loop iteration;
+- uses Z3 to discard infeasible traces and build complete typed XLS witnesses;
+  and
+- reports path and resource limits explicitly as incomplete enumeration.
 
-The result is one merged symbolic value with unconditional path condition
-`true`. All input leaves are made symbolic. Evaluation is topological rather
-than demand-driven, and expressions are raw SMT-LIB strings rather than an
-interned backend-neutral DAG.
+Merged evaluation remains available as supporting infrastructure. Canonical
+enumeration returns residual path values, symbolic conditions, sparse selection
+traces, and concrete witnesses. The pinned operation matrix contains no
+remaining in-scope partial or gap row.
 
 ## Validation snapshot
 
@@ -60,25 +67,24 @@ At this snapshot:
 - supported symbolic equivalence checks return `UNSAT`;
 - several unoptimized equivalence checks are blocked by limitations in the XLS
   reference translator; and
-- path-witness replay is blocked because enumeration and selection traces do not
-  yet exist.
+- the original curated validation table still records path-witness replay as
+  blocked and must be regenerated against the implemented enumerator.
 
 The table, rather than prose in this document, is the detailed source for case
 counts and per-function outcomes.
 
 ## Gaps to v1
 
-- no concrete/symbolic input API or concrete value domain;
-- no demand-driven pruning of concretely inactive cones;
-- no backend-neutral interned expression DAG;
-- no explicit solver adapter or general model-to-XLS-value conversion;
-- no symbolic path conditions beyond `true`;
-- no path splitting, feasibility pruning, or explicit completeness outcome;
-- no canonical selection traces;
-- no path-witness replay or enumeration mutation harness;
-- incomplete pure-operation, arbitrary-width, and structured-value coverage;
+- regenerate the curated validation matrix with completed path counts and
+  witness replay for optimized and unoptimized IR;
+- add bounded generated-function trace-set comparison independent of the
+  symbolic enumerator;
+- add mutations that omit, duplicate, relabel, weaken, strengthen, and
+  incorrectly activate paths and show the release harness rejects them;
+- exercise more concrete/symbolic argument partitions in the curated corpus;
+- record release performance ceilings and the supported toolchain versions;
   and
-- operation and type gaps recorded in
-  [`support-matrix.tsv`](support-matrix.tsv) remain to be closed.
+- reconcile the public API documentation and release evidence with the final
+  observed results.
 
 The planned sequence for closing these gaps is in [`roadmap.md`](roadmap.md).

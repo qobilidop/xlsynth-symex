@@ -2,7 +2,7 @@
 # status values: supported, partial, gap, excluded
 # operation	status	note
 param	supported	symbolic bits, tuple, and array parameters
-literal	partial	structured values supported; arbitrary-width bits require native byte conversion
+literal	supported	structured and arbitrary-width bits values
 identity	supported	merged value semantics
 not	supported	merged value semantics
 neg	supported	merged value semantics
@@ -11,20 +11,20 @@ or_reduce	supported	merged value semantics
 and_reduce	supported	merged value semantics
 xor_reduce	supported	merged value semantics
 and	supported	merged value semantics
-nand	gap	pure value operation
-nor	gap	pure value operation
+nand	supported	merged value semantics
+nor	supported	merged value semantics
 or	supported	merged value semantics
 xor	supported	merged value semantics
 add	supported	merged value semantics
 sub	supported	merged value semantics
 umul	supported	merged value semantics
 smul	supported	merged value semantics
-udiv	gap	pure value operation
-sdiv	gap	pure value operation
-umod	gap	pure value operation
-smod	gap	pure value operation
-umulp	gap	pure structured value operation
-smulp	gap	pure structured value operation
+udiv	supported	XLS divide-by-zero semantics included
+sdiv	supported	XLS signed divide-by-zero semantics included
+umod	supported	XLS modulo-by-zero semantics included
+smod	supported	XLS signed remainder semantics included
+umulp	supported	partial products satisfy the XLS modular-sum relation
+smulp	supported	signed partial products satisfy the XLS modular-sum relation
 eq	supported	merged value semantics
 ne	supported	merged value semantics
 ugt	supported	merged value semantics
@@ -38,34 +38,34 @@ sle	supported	merged value semantics
 shll	supported	merged value semantics
 shrl	supported	merged value semantics
 shra	supported	merged value semantics
-gate	gap	pure value operation
+gate	supported	deep zeroing for bits and structured values
 zero_ext	supported	merged value semantics
 sign_ext	supported	merged value semantics
 bit_slice	supported	merged value semantics
 concat	supported	merged value semantics
 array	supported	finite structural value
-array_index	partial	only one-dimensional indexing
-array_concat	gap	pure structural value operation
-array_slice	gap	pure structural value operation
-array_update	partial	only one-dimensional update
+array_index	supported	multidimensional indexing with XLS out-of-bounds clamping
+array_concat	supported	finite structural array concatenation
+array_slice	supported	XLS clamped slicing including oversized starts
+array_update	supported	multidimensional update with XLS out-of-bounds behavior
 tuple	supported	finite structural value
 tuple_index	supported	finite structural value
 dynamic_bit_slice	supported	merged data selection
-bit_slice_update	gap	pure value operation
-sel	partial	merged semantics only; canonical enumeration required
-priority_sel	gap	merged semantics and canonical enumeration required
-one_hot_sel	gap	merged semantics and canonical bitmask enumeration required
+bit_slice_update	supported	merged data selection including oversized starts
+sel	supported	complete canonical case/default enumeration
+priority_sel	supported	complete priority-resolved case/default enumeration
+one_hot_sel	supported	complete canonical selected-bitmask enumeration
 one_hot	supported	merged value semantics
 encode	supported	merged value semantics
-decode	gap	pure value operation
-ext_carry_out	gap	pure xlsynth-pir extension operation
-ext_prio_encode	gap	pure xlsynth-pir extension operation
-ext_clz	gap	pure xlsynth-pir extension operation
-ext_normalize_left	gap	pure xlsynth-pir extension operation
-ext_mask_low	gap	pure xlsynth-pir extension operation
-ext_nary_add	gap	pure xlsynth-pir extension operation
-invoke	partial	merged semantics; choice identities across calls required
-counted_for	partial	merged semantics; choice identities across iterations required
+decode	supported	merged value semantics
+ext_carry_out	supported	desugared to pinned ordinary PIR operations
+ext_prio_encode	supported	desugared to pinned ordinary PIR operations
+ext_clz	supported	desugared to pinned ordinary PIR operations
+ext_normalize_left	supported	desugared to pinned ordinary PIR operations
+ext_mask_low	supported	desugared to pinned ordinary PIR operations
+ext_nary_add	supported	desugared to pinned ordinary PIR operations
+invoke	supported	demand evaluation with callsite-qualified choice identities
+counted_for	supported	finite unrolling with iteration-qualified choice identities
 after_all	excluded	token and effect ordering is outside the pure value contract
 assert	excluded	token-consuming diagnostic operation
 trace	excluded	token-consuming diagnostic operation
