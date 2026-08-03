@@ -16,10 +16,12 @@ invariants:
 - public values and constraints are typed and independent of a particular
   solver API;
 - concrete inputs prune unused dataflow before expressions are constructed;
-- a complete result never hides an in-policy symbolic selection by merging it;
+- a complete enumeration records every active selection admitted by the
+  policy, even when its cases compute the same value;
 - every partial result states why it is incomplete;
 - observable result ordering and expression rendering are deterministic;
-- every feasible guarded result has a typed model that can be replayed through XLS; and
+- every feasible guarded result has a typed model that can be replayed through
+  XLS; and
 - unsupported effects and state are rejected rather than approximated as pure
   values.
 
@@ -36,17 +38,17 @@ result = add(left, peer)
 ```
 
 For independent symbolic `x`, `y`, and `z`, there are eight concrete selector
-assignments but six canonical selection traces. When `x = 1`, `inner` is outside
-the demanded slice, so `y` is a don't-care and absent from the trace. The
-`peer` selection remains active even though both cases are `D`; otherwise the
-enumeration would silently erase declared coverage. Merged evaluation preserves
-the graph as one conditional value, while enumeration exposes six guarded
-results.
+assignments but six canonical selection traces. When `x = 1`, `left` selects
+`C`, so `inner` cannot affect the function result; `y` is therefore a
+don't-care and absent from the trace. The `peer` selection remains active even
+though both cases are `D`; otherwise enumeration would silently erase a
+selection the IR declares. Merged evaluation preserves the graph as one
+conditional value, while enumeration exposes six guarded results.
 
 ![One XLS graph with nested, parallel, and equal-valued selections represented as one merged expression and six guarded results](../assets/one-graph-two-views.svg)
 
 *The two entry-point families share value semantics. Enumeration changes how
-declared selections are represented, not what the XLS function computes.*
+selection operations are represented, not what the XLS function computes.*
 
 This example is intentionally a dataflow graph rather than a control-flow
 graph. The remainder of the design explains how values, demanded nodes,
@@ -65,7 +67,7 @@ implementation, tests, and documentation:
 | **Canonical selection trace** | A sparse map from active selection identities to their outcomes. It identifies an enumerated behavior; it is not a temporal event log or a route through graph edges. |
 | **Guard** | The Boolean predicate over symbolic inputs under which one trace applies. It is the conjunction of caller constraints and the exact outcome requirements recorded by that trace. |
 | **Residual result** | The symbolic XLS value remaining after the trace's active selections are fixed. Ordinary symbolic data operations may remain in it. |
-| **Witness** | A complete typed concrete input assignment satisfying the guard. Re-evaluation in XLS must produce the residual result and the same canonical trace. |
+| **Witness** | A complete typed concrete input assignment satisfying the guard. Under that assignment, the residual result must equal independent concrete XLS evaluation, and concrete enumeration replay must record the same canonical trace. |
 | **Guarded result** | One feasible enumeration member: canonical selection trace, guard, residual result, and witness. This is the public `GuardedResult` record. |
 | **Selection partition** | The guarded results returned by a complete enumeration. Their traces are unique, their guards are disjoint, and their guards together cover the caller-constrained input domain. |
 
@@ -74,63 +76,6 @@ In XLS documentation and graph theory it already denotes a route through
 data-dependency edges; in conventional symbolic execution it usually denotes a
 sequence of control-flow decisions. Neither meaning describes a sparse map over
 possibly parallel XLS selection sites.
-
-## How the three selection operations differ
-
-`sel`, `priority_sel`, and `one_hot_sel` are all pure value operations, but
-their selector bits encode different questions. The distinction is defined by
-the [XLS IR semantics](https://google.github.io/xls/ir_semantics/#control-oriented-operations)
-and is preserved by both merged evaluation and selection enumeration.
-
-| Operation | Interpretation of the selector | If no case is indicated | If several bits are set | Canonical outcome |
-|---|---|---|---|---|
-| `sel` | The entire bit vector is one unsigned case index. | Index zero selects case 0; an out-of-range index selects the explicit default. | The bit pattern still denotes one numeric index; individual set bits have no separate meaning. | `Case(index)` or `Default` |
-| `priority_sel` | Bit `i` requests case `i`; lower indices have higher priority. | The required default is selected. | Only the lowest-index set bit wins. | `Case(index)` or `Default` |
-| `one_hot_sel` | Bit `i` independently enables case `i`. | The zero value of the result type is returned. | Every enabled case contributes through bitwise OR. | `OneHotMask`, including zero and multi-bit masks |
-
-For `sel`, the selector must be wide enough to represent every case index. An
-explicit default is required exactly when some selector values lie outside the
-case range; it is forbidden when the cases cover the entire selector domain.
-For `priority_sel` and `one_hot_sel`, selector width equals the number of cases.
-All cases, and any default, have the same result type.
-
-The name `one_hot_sel` does **not** impose a one-hot precondition. Its result is
-well-defined when zero, one, or several selector bits are set. For bits values,
-selected cases are bitwise-ORed. For tuples and arrays, the OR is applied
-recursively to corresponding bits leaves. Consequently, `priority_sel` and
-`one_hot_sel` agree when exactly one selector bit is set, but differ for both
-the all-zero and multi-bit cases.
-
-The following example uses the same selector and case values for all three
-operations. It demonstrates why visually similar selector wiring does not imply
-the same value or the same guard:
-
-![The same selector interpreted as a numeric index by sel, a priority request vector by priority_sel, and an enable mask by one_hot_sel](../assets/selector-operations.svg)
-
-With the values shown in the illustration, additional selector patterns make
-the distinction especially clear:
-
-| Selector | `sel` | `priority_sel` | `one_hot_sel` |
-|---|---|---|---|
-| `0b000` | `C0 = 0b0011` | `D = 0b1111` | zero, `0b0000` |
-| `0b010` | `C2 = 0b1001` | `C1 = 0b0101` | `C1 = 0b0101` |
-| `0b101` | out of range, so `D = 0b1111` | bit 0 wins, so `C0 = 0b0011` | `C0 OR C2 = 0b1011` |
-
-Selection enumeration follows those value semantics while choosing guards that
-describe the complete input region for each canonical outcome:
-
-- `sel` case `i` has guard `selector = i`; its default guard excludes every
-  in-range case index.
-- `priority_sel` case `i` requires bit `i` and excludes all lower-index,
-  higher-priority bits. Higher-index bits remain don't-cares. Its default guard
-  requires every selector bit to be zero.
-- `one_hot_sel` records the entire selected-case mask, so its guard fixes every
-  selector bit. An unconstrained `N`-bit selector can therefore produce up to
-  `2^N` canonical masks before feasibility pruning.
-
-Thus the enumerator treats all three operations as selection sites, but it does
-not force them into one generic branch rule. Each operation defines its own
-outcomes, guards, residual value, and potential enumeration cost.
 
 ## Dataflow, not control flow
 
@@ -166,43 +111,62 @@ outcome, demand-driven evaluation can omit the inactive value cone without
 changing the returned value. The mechanics are described in
 [`Demand-driven evaluation`](#demand-driven-evaluation).
 
-## Academic context
+## How the three selection operations differ
 
-There is no single established research area named “symbolic execution of
-dataflow graphs.” The closest work spans hardware symbolic simulation,
-symbolic analysis of block-diagram languages, constraint-based testing of
-synchronous dataflow programs, and symbolic execution of RTL. These uses of
-“dataflow” should not be confused with compiler data-flow analysis over a
-control-flow graph or symbolic scheduling of token-based actor networks.
+`sel`, `priority_sel`, and `one_hot_sel` are all pure value operations, but
+their selector bits answer different questions. The distinction is defined by
+the [XLS IR semantics](https://google.github.io/xls/ir_semantics/#control-oriented-operations)
+and is preserved by both merged evaluation and selection enumeration.
 
-| Research lineage | Relevant idea | Relationship to this design |
-|---|---|---|
-| Bryant, [*Symbolic Simulation—Techniques and Applications*](https://www.cs.cmu.edu/~bryant/pubdir/dac90.pdf) (1990) | Propagate symbolic inputs through circuit operations and retain conditional behavior in merged expressions. | This is the direct precedent for merged evaluation of an XLS function; it does not enumerate selection outcomes. |
-| Kanade et al., [*Generating and Analyzing Symbolic Traces of Simulink/Stateflow Models*](https://theory.stanford.edu/~srirams/papers/cav2009.pdf) (2009) | Compose block-level symbolic transformers consisting of a guard and an expression; conditional blocks contribute the choice observed in a concrete simulation. | A transformer resembles one guarded result, but the analysis generalizes one concrete, temporal trace rather than enumerating every feasible selection outcome. |
-| Li et al., [*SEDGE: Symbolic Example Data Generation for Dataflow Programs*](https://c.csallner.org/papers/li13sedge.pdf) (2013) | Partition the behavior of operators such as filters into equivalence classes, derive symbolic constraints, and solve for representative input data. | This directly applies symbolic execution to a dataflow DAG and is close to outcome-directed test generation, but tuples flow through and may terminate at operators; XLS operands are eager values. |
-| Marre and Blanc, [*Test Selection Strategies for Lustre Descriptions in GATeL*](https://doi.org/10.1016/j.entcs.2004.12.010) (2005) | Translate synchronous dataflow equations into guarded constraints and split the input domain by operator sub-cases, such as the two outcomes of `if`. | Operator sub-cases and domain splitting closely resemble selection outcomes and guards, but Lustre adds temporal cycles and state. |
-| Ryan and Sturton, [*Sylvia: Countering the Path Explosion Problem in the Symbolic Execution of Hardware Designs*](https://par.nsf.gov/servlets/purl/10529227) (2023) | Split at RTL control statements, explore independent blocks separately, and compose their fragments with SMT. | This addresses the cross-product created by parallel hardware choices, but its paths are paths through RTL control flow rather than outcomes of mux operations in a pure dataflow graph. |
+| Operation | Interpretation of the selector | Selector is zero | Several bits are set | Canonical outcome |
+|---|---|---|---|---|
+| `sel` | The entire bit vector is one unsigned case index. | Case 0 is selected. | The bit pattern still denotes one numeric index; individual set bits have no separate meaning. | `Case(index)` or `Default` |
+| `priority_sel` | Bit `i` requests case `i`; lower indices have higher priority. | The required default is selected. | Only the lowest-index set bit wins. | `Case(index)` or `Default` |
+| `one_hot_sel` | Bit `i` independently enables case `i`. | The zero value of the result type is returned. | Every enabled case contributes through bitwise OR. | `OneHotMask`, including zero and multi-bit masks |
 
-This literature also explains why this crate exposes two views. Merged
-evaluation follows the hardware symbolic-simulation tradition: choices remain
-inside conditional values. Selection enumeration instead partitions the input
-domain into guarded operator outcomes, drawing on dataflow test generation and
-symbolic execution. The former risks expression growth; the latter risks an
-exponential number of results.
+For `sel`, the selector must be wide enough to represent every case index. An
+explicit default is required exactly when some selector values lie outside the
+case range; it is forbidden when the cases cover the entire selector domain.
+For `priority_sel` and `one_hot_sel`, selector width equals the number of cases.
+All cases, and any default, have the same result type.
 
-Bryant, Beatty, and Seger's
-[*Formal Hardware Verification by Symbolic Ternary Trajectory Evaluation*](https://www.cs.cmu.edu/~bryant/pubdir/dac91a.pdf)
-(1991) is adjacent hardware prior art, but its *trajectory* is a bounded
-temporal sequence of circuit states, not a selection-outcome assignment within
-one pure function evaluation.
+The name `one_hot_sel` does **not** impose a one-hot precondition. Its result is
+well-defined when zero, one, or several selector bits are set. When the result
+type is bits, selected cases are bitwise-ORed; for tuples and arrays, the OR
+applies recursively to corresponding bits leaves. Consequently, `priority_sel`
+and `one_hot_sel` agree when exactly one selector bit is set, but differ in the
+all-zero and multi-bit cases.
 
-The surveyed work does not supply a standard term for the exact combination
-used here: complete feasible outcome assignments at mux-like value operations,
-with structurally inactive nested operations omitted. Consequently,
-`selection site`, `selection outcome`, `guard`, `guarded result`, and
-`canonical selection trace` are defined project terms. They describe the
-semantics precisely without claiming that a trace is a control-flow or
-data-dependency path, or that the combination is academically novel.
+The following example uses the same selector and case values for all three
+operations. It demonstrates why visually similar selector wiring does not
+imply the same result or guard:
+
+![The same selector interpreted as a numeric index by sel, a priority request vector by priority_sel, and an enable mask by one_hot_sel](../assets/selector-operations.svg)
+
+With the values shown in the illustration, three selector patterns expose the
+distinction:
+
+| Selector | `sel` | `priority_sel` | `one_hot_sel` |
+|---|---|---|---|
+| `0b000` | `C0 = 0b0011` | `D = 0b1111` | zero, `0b0000` |
+| `0b010` | `C2 = 0b1001` | `C1 = 0b0101` | `C1 = 0b0101` |
+| `0b101` | out of range, so `D = 0b1111` | bit 0 wins, so `C0 = 0b0011` | `C0 OR C2 = 0b1011` |
+
+Enumeration follows those value semantics while constructing a guard for each
+canonical outcome:
+
+- `sel` case `i` has guard `selector = i`; its default guard excludes every
+  in-range case index.
+- `priority_sel` case `i` requires bit `i` and excludes all lower-index,
+  higher-priority bits. Higher-index bits remain don't-cares. Its default guard
+  requires every selector bit to be zero.
+- `one_hot_sel` records the entire selected-case mask, so its guard fixes every
+  selector bit. An unconstrained `N`-bit selector can therefore produce up to
+  `2^N` masks before feasibility pruning.
+
+The enumerator therefore treats all three operations as selection sites
+without forcing them into one generic choice rule. Each operation defines its
+own outcomes, guards, residual value, and potential enumeration cost.
 
 ## System boundary
 
@@ -222,7 +186,9 @@ operation inventory exposes gaps, and representable extension operations are
 desugared before evaluation.
 
 The symbolic layers contain no processor, instruction, clock, or memory
-concepts. A state transition is simply one possible pure XLS function.
+concepts. A downstream tool may encode one explicit state transition as an
+ordinary pure function over state arguments and results; sequencing such
+transitions remains outside this crate.
 
 ## Values and expressions
 
@@ -260,10 +226,11 @@ and solver models, so the public API never depends on rendered variable names.
 XLS functions are eager dataflow graphs, but pure evaluation permits a
 demand-driven implementation:
 
-1. Demand the selected function's return node.
+1. Demand the target function's return node.
 2. Ordinary operations demand their operands.
 3. A concretely resolved selection demands only the selected case.
-4. A symbolic selection outcome demands only the case active on that outcome.
+4. A symbolic selection outcome demands only the case or cases enabled by that
+   outcome.
 5. Shared demanded nodes are memoized within the applicable function,
    invocation, input environment, and candidate state.
 
@@ -272,9 +239,9 @@ case cones whose values cannot affect the demanded result. The purity boundary
 is essential: discarding a token-consuming or stateful operand would not be
 semantically valid.
 
-Pure invokes recursively evaluate the callee in a new frame. `counted_for`
-has static trip count and stride attributes, so it is evaluated as finite
-repeated application of its pure body. Selection identities include callsite and
+Pure invokes recursively evaluate the callee in a new frame. `counted_for` has
+static trip count and stride attributes, so it is evaluated as finite repeated
+application of its pure body. Selection identities include callsite and
 zero-based iteration frames to distinguish repeated dynamic instances of the
 same callee node.
 
@@ -286,24 +253,18 @@ Selection enumeration threads an evaluation state containing:
 - the sparse canonical selection trace; and
 - candidate-local memoized values.
 
-Ordinary operations combine values without splitting the state. A declared
-selection site produces one candidate per policy outcome unless its selector is
-concrete. Each candidate conjoins the exact outcome guard, records the outcome,
-and demands only the selected case. Structurally inactive nested selections are
-therefore absent by construction.
-
-The guards encode XLS selection semantics directly:
-
-- `sel` guards case indices and the default range;
-- `priority_sel` guards one selected bit while excluding every higher-priority
-  bit; and
-- `one_hot_sel` records the selected case-bit mask and merges the values enabled
-  by that mask according to XLS semantics.
+Ordinary operations combine values without splitting the state. A symbolic
+active selection produces one candidate per operation-specific outcome. A
+concrete active selection records its single outcome without splitting. Each
+candidate conjoins the exact outcome guard, records the outcome, and demands
+only the selected case or cases. Structurally inactive nested selections are
+therefore absent by construction. The per-operation outcome and guard rules are
+defined in [`How the three selection operations differ`](#how-the-three-selection-operations-differ).
 
 Candidate construction is syntactic. Feasibility solving subsequently removes
-contradictory guards and caller assumptions. Trace uniqueness is checked after
-solving, and guarded results are sorted by their complete trace identity before being
-returned.
+candidates whose outcome guards contradict one another or the caller
+assumptions. Trace uniqueness is checked after solving, and guarded results are
+sorted by their complete trace identity before being returned.
 
 Structural inactivity is intentionally narrower than semantic irrelevance. If
 an active selection's cases compute equal values, it remains an active selection
@@ -343,11 +304,12 @@ semantics.
 
 ## Merged and enumerated evaluation
 
-Merged evaluation and selection enumeration share value and expression semantics.
-Merged evaluation retains symbolic selections as conditional expressions and
-produces one compact whole-function result. Enumeration splits only declared
-selection sites while allowing ordinary data selections to remain symbolic inside
-each residual result.
+Merged evaluation and selection enumeration share value and expression
+semantics. Merged evaluation retains symbolic selections as conditional
+expressions and produces one whole-function result. Under the default policy,
+enumeration splits `sel`, `priority_sel`, and `one_hot_sel` sites. Dynamic array
+indices, slice positions, shift amounts, and similar symbolic data remain
+merged inside each residual result.
 
 Keeping merged evaluation serves three architectural purposes:
 
@@ -368,11 +330,11 @@ queries. Statistics report expression nodes, evaluated nodes, memoization hits,
 selection outcomes, solver queries, infeasible candidates, and construction and
 solver time.
 
-A hard syntactic-branch ceiling prevents unbounded materialization and reports
-an incomplete result. The public returned-result limit is applied after candidate
-solving; it is an output/completeness limit rather than an execution budget.
-Changing that behavior requires an explicit ordering and early-termination
-contract.
+A hard candidate-expansion ceiling prevents impractical materialization and
+reports an incomplete result. The public returned-result limit is applied after
+candidate solving; it is an output and completeness limit rather than an
+execution budget. Changing that behavior requires an explicit ordering and
+early-termination contract.
 
 The main optional extensions are incremental or parallel solving, stronger
 expression simplification, known-bit propagation, additional solver adapters,
@@ -380,3 +342,39 @@ and opt-in selection policies for symbolic data selectors. None changes the pure
 function boundary. Procs, hardware timing, general memory, and whole-machine
 execution remain separate concerns rather than future obligations of this
 library.
+
+## Academic lineage and terminology
+
+There is no single established research area named “symbolic execution of
+dataflow graphs.” The closest work spans hardware symbolic simulation,
+symbolic analysis of block-diagram languages, constraint-based testing of
+synchronous dataflow programs, and symbolic execution of RTL. These uses of
+“dataflow” should not be confused with compiler data-flow analysis over a
+control-flow graph or symbolic scheduling of token-based actor networks.
+
+| Research lineage | Relevant idea | Relationship to this design |
+|---|---|---|
+| Bryant, [*Symbolic Simulation—Techniques and Applications*](https://www.cs.cmu.edu/~bryant/pubdir/dac90.pdf) (1990) | Propagate symbolic inputs through circuit operations and retain conditional behavior in merged expressions. | Direct precedent for merged evaluation of an XLS function; it does not enumerate selection outcomes. |
+| Kanade et al., [*Generating and Analyzing Symbolic Traces of Simulink/Stateflow Models*](https://theory.stanford.edu/~srirams/papers/cav2009.pdf) (2009) | Compose block-level symbolic transformers consisting of a guard and an expression; conditional blocks contribute the choice observed in a concrete simulation. | A transformer resembles one guarded result, but the analysis generalizes one concrete temporal trace rather than enumerating every feasible selection outcome. |
+| Li et al., [*SEDGE: Symbolic Example Data Generation for Dataflow Programs*](https://c.csallner.org/papers/li13sedge.pdf) (2013) | Partition operators such as filters into equivalence classes, derive symbolic constraints, and solve for representative input data. | Directly applies symbolic execution to a dataflow DAG, but tuples flow through and may terminate at operators; XLS operands are eager values. |
+| Marre and Blanc, [*Test Selection Strategies for Lustre Descriptions in GATeL*](https://doi.org/10.1016/j.entcs.2004.12.010) (2005) | Translate synchronous dataflow equations into guarded constraints and split the input domain by operator sub-cases. | Operator sub-cases and domain splitting resemble selection outcomes and guards, but Lustre adds temporal cycles and state. |
+| Ryan and Sturton, [*Sylvia: Countering the Path Explosion Problem in the Symbolic Execution of Hardware Designs*](https://par.nsf.gov/servlets/purl/10529227) (2023) | Split at RTL control statements, explore independent blocks separately, and compose their fragments with SMT. | Addresses parallel hardware choices, but its paths follow RTL control flow rather than mux operations in a pure dataflow graph. |
+
+Together these works provide precedents for the two evaluation modes and their
+trade-off: merged symbolic expressions may grow, while guarded outcome
+enumeration may produce exponentially many results. They do not supply a
+standard term for complete feasible outcome assignments at mux-like value
+operations with structurally inactive nested operations omitted.
+
+Bryant, Beatty, and Seger's
+[*Formal Hardware Verification by Symbolic Ternary Trajectory Evaluation*](https://www.cs.cmu.edu/~bryant/pubdir/dac91a.pdf)
+(1991) is adjacent hardware prior art, but its *trajectory* is a bounded
+temporal sequence of circuit states, not a selection-outcome assignment within
+one pure function evaluation.
+
+Consequently, `selection site`, `selection outcome`, `guard`, `guarded result`,
+and `canonical selection trace` are defined project terms. They describe the
+semantics precisely without claiming that a trace is a control-flow or
+data-dependency path, or that the combination is academically novel. The
+project's correctness argument comes from the independent evidence in
+[`verification.md`](verification.md), not from analogy to this prior art.
