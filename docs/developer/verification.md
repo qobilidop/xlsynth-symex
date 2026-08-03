@@ -79,7 +79,7 @@ The evidence is layered and checked into the repository:
 
 | Evidence | Source |
 |---|---|
-| Operation and type coverage | [`../user/support-matrix.tsv`](../user/support-matrix.tsv) and [`../../tests/support_matrix.rs`](../../tests/support_matrix.rs) |
+| Operation and type coverage | [`../user/support-matrix.md`](../user/support-matrix.md) and [`../../tests/support_matrix.rs`](../../tests/support_matrix.rs) |
 | Primitive and structural semantics | [`../../tests/operation_semantics.rs`](../../tests/operation_semantics.rs) |
 | Generated value comparison | [`../../tests/differential.rs`](../../tests/differential.rs) |
 | Choice and mixed-input semantics | [`../../tests/path_enumeration.rs`](../../tests/path_enumeration.rs) |

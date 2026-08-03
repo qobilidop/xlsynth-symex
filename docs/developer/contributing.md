@@ -86,7 +86,7 @@ When adding or modifying an XLS value operation:
    structural shapes.
 4. Compare with the XLS interpreter or JIT as the independent value oracle.
 5. Add or update the operation row and executable coverage name in
-   [`../user/support-matrix.tsv`](../user/support-matrix.tsv).
+   [`../user/support-matrix.md`](../user/support-matrix.md).
 6. Promote any minimized failure to a permanent regression.
 
 Do not classify an in-scope operation as unsupported merely because
@@ -123,7 +123,7 @@ and other applicable evidence.
 Keep each fact in one place:
 
 - public semantics and limitations: `docs/user/guide.md`;
-- supported operations and executable targets: `docs/user/support-matrix.tsv`;
+- supported operations and executable targets: `docs/user/support-matrix.md`;
 - internal architecture and rationale: `docs/developer/design.md`;
 - validation claims and release evidence: `docs/developer/verification.md`;
 - upstream integration: `docs/developer/upstreaming.md`.

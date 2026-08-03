@@ -29,7 +29,7 @@ For library users:
 
 - [User guide](docs/user/guide.md): usage, path semantics, completeness,
   constraints, limitations, and performance characteristics.
-- [Support matrix](docs/user/support-matrix.tsv): the checked operation inventory
+- [Support matrix](docs/user/support-matrix.md): the checked operation inventory
   for the pinned XLS toolchain.
 - [Rust API documentation](https://docs.rs/xlsynth-symex): item-level API
   reference once the crate is published. Until then, run

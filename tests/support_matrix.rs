@@ -4,45 +4,87 @@
 
 use std::collections::BTreeMap;
 
-const MATRIX: &str = include_str!("../docs/user/support-matrix.tsv");
+const MATRIX: &str = include_str!("../docs/user/support-matrix.md");
 const OPERATION_TESTS: &str = include_str!("operation_semantics.rs");
 const PATH_TESTS: &str = include_str!("path_enumeration.rs");
+const XLSYNTH_CRATE_REVISION: &str = "92bc9b932981c776bb4bb197cd6b6726f17ec090";
+
+fn markdown_cells(line: &str) -> Vec<&str> {
+    line.strip_prefix('|')
+        .and_then(|line| line.strip_suffix('|'))
+        .expect("support matrix table rows must begin and end with `|`")
+        .split('|')
+        .map(str::trim)
+        .collect()
+}
+
+fn code_cell<'a>(cell: &'a str, line: &str) -> &'a str {
+    let Some(value) = cell
+        .strip_prefix('`')
+        .and_then(|cell| cell.strip_suffix('`'))
+    else {
+        panic!("support matrix identifiers must be code-formatted: {line}");
+    };
+    assert!(!value.is_empty(), "empty code-formatted cell: {line}");
+    value
+}
 
 #[test]
 fn support_matrix_is_complete_and_well_formed() {
+    assert!(
+        MATRIX.contains(&format!("`{XLSYNTH_CRATE_REVISION}`.")),
+        "support matrix must name the pinned xlsynth-crate revision"
+    );
+
     let mut entries = BTreeMap::new();
-    for line in MATRIX
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-    {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(
-            fields.len(),
-            4,
-            "support matrix row must have four tab-separated fields: {line}"
-        );
-        assert!(
-            matches!(fields[1], "supported" | "partial" | "gap" | "excluded"),
-            "{} has unknown status {}",
-            fields[0],
-            fields[1]
-        );
-        assert!(!fields[2].is_empty(), "{} has no rationale", fields[0]);
-        let coverage = fields[3];
-        if fields[1] == "supported" {
+    let mut current_status = None;
+    for line in MATRIX.lines().map(str::trim) {
+        if line.starts_with("## ") {
+            current_status = match line {
+                "## Supported operations" => Some("supported"),
+                "## Excluded operations" => Some("excluded"),
+                _ => None,
+            };
+            continue;
+        }
+        if !line.starts_with('|') || line.starts_with("|---") || line.starts_with("| Operation") {
+            continue;
+        }
+
+        let status = current_status
+            .unwrap_or_else(|| panic!("support matrix row outside a status section: {line}"));
+        let fields = markdown_cells(line);
+        let (operation, coverage) = if status == "supported" {
+            assert_eq!(
+                fields.len(),
+                3,
+                "supported rows need operation, semantics, and coverage cells: {line}"
+            );
+            let operation = code_cell(fields[0], line);
+            assert!(
+                !fields[1].is_empty(),
+                "{operation} has no semantic rationale"
+            );
+            let coverage = code_cell(fields[2], line);
             let declaration = format!("fn {coverage}(");
             assert!(
                 OPERATION_TESTS.contains(&declaration) || PATH_TESTS.contains(&declaration),
-                "{} names unknown executable coverage target {coverage}",
-                fields[0]
+                "{operation} names unknown executable coverage target {coverage}"
             );
+            (operation, Some(coverage))
         } else {
-            assert_eq!(coverage, "n/a", "{} exclusion coverage", fields[0]);
-        }
+            assert_eq!(
+                fields.len(),
+                2,
+                "excluded rows need operation and reason cells: {line}"
+            );
+            let operation = code_cell(fields[0], line);
+            assert!(!fields[1].is_empty(), "{operation} has no exclusion reason");
+            (operation, None)
+        };
         assert!(
-            entries.insert(fields[0], (fields[1], coverage)).is_none(),
-            "duplicate operation {}",
-            fields[0]
+            entries.insert(operation, (status, coverage)).is_none(),
+            "duplicate operation {operation}"
         );
     }
 
@@ -122,6 +164,20 @@ fn support_matrix_is_complete_and_well_formed() {
         "zero_ext",
     ];
     assert_eq!(entries.keys().copied().collect::<Vec<_>>(), expected);
+    assert_eq!(
+        entries
+            .values()
+            .filter(|(status, _)| *status == "supported")
+            .count(),
+        65
+    );
+    assert_eq!(
+        entries
+            .values()
+            .filter(|(status, _)| *status == "excluded")
+            .count(),
+        8
+    );
     assert!(
         entries
             .iter()

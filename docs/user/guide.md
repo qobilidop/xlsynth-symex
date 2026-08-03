@@ -127,7 +127,7 @@ or path-policy changes.
 The supported value domain is recursive fixed-size bits, tuples, and arrays,
 including zero-width bits where XLS permits them. Pure calls and `counted_for`
 with a static trip count are supported. The checked inventory is
-[`support-matrix.tsv`](support-matrix.tsv); every supported row names an
+[`support-matrix.md`](support-matrix.md); every supported row names an
 executable coverage target.
 
 The following remain deliberately outside the project boundary:
