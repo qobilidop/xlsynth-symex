@@ -1,13 +1,13 @@
 # id	ir_form	curated_vector_differential	differential_fuzz	symbolic_equivalence	path_witness_replay
-tiny_adder	unoptimized	pass:4	pass:4	unsat	blocked:selection-traces
-tiny_adder	optimized	pass:4	pass:4	unsat	blocked:selection-traces
-nested_sel	unoptimized	pass:9	pass:2048	unsat	blocked:selection-traces
-nested_sel	optimized	pass:9	pass:2048	unsat	blocked:selection-traces
-riscv_decode_opcode	unoptimized	pass:7	pass:2048	unsat	blocked:selection-traces
-riscv_decode_opcode	optimized	pass:7	pass:2048	unsat	blocked:selection-traces
-overflow_detect	unoptimized	pass:5	pass:2048	blocked:xls-reference-translator	blocked:selection-traces
-overflow_detect	optimized	pass:5	pass:2048	unsat	blocked:selection-traces
-lfsr	unoptimized	pass:6	pass:2048	blocked:xls-reference-translator	blocked:selection-traces
-lfsr	optimized	pass:6	pass:2048	unsat	blocked:selection-traces
-find_index	unoptimized	pass:5	pass:2048	blocked:xls-reference-translator	blocked:selection-traces
-find_index	optimized	pass:5	pass:2048	unsat	blocked:selection-traces
+tiny_adder	unoptimized	pass:4	pass:4	unsat	pass:1
+tiny_adder	optimized	pass:4	pass:4	unsat	pass:1
+nested_sel	unoptimized	pass:9	pass:2048	unsat	pass:5
+nested_sel	optimized	pass:9	pass:2048	unsat	pass:5
+riscv_decode_opcode	unoptimized	pass:7	pass:2048	unsat	pass:1
+riscv_decode_opcode	optimized	pass:7	pass:2048	unsat	pass:1
+overflow_detect	unoptimized	pass:5	pass:2048	blocked:xls-reference-translator	pass:1
+overflow_detect	optimized	pass:5	pass:2048	unsat	pass:1
+lfsr	unoptimized	pass:6	pass:2048	blocked:xls-reference-translator	pass:1
+lfsr	optimized	pass:6	pass:2048	unsat	pass:1
+find_index	unoptimized	pass:5	pass:2048	blocked:xls-reference-translator	pass:2
+find_index	optimized	pass:5	pass:2048	unsat	pass:1

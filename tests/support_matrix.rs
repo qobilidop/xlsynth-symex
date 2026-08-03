@@ -5,6 +5,8 @@
 use std::collections::BTreeMap;
 
 const MATRIX: &str = include_str!("../docs/support-matrix.tsv");
+const OPERATION_TESTS: &str = include_str!("operation_semantics.rs");
+const PATH_TESTS: &str = include_str!("path_enumeration.rs");
 
 #[test]
 fn support_matrix_is_complete_and_well_formed() {
@@ -16,8 +18,8 @@ fn support_matrix_is_complete_and_well_formed() {
         let fields = line.split('\t').collect::<Vec<_>>();
         assert_eq!(
             fields.len(),
-            3,
-            "support matrix row must have three tab-separated fields: {line}"
+            4,
+            "support matrix row must have four tab-separated fields: {line}"
         );
         assert!(
             matches!(fields[1], "supported" | "partial" | "gap" | "excluded"),
@@ -26,8 +28,19 @@ fn support_matrix_is_complete_and_well_formed() {
             fields[1]
         );
         assert!(!fields[2].is_empty(), "{} has no rationale", fields[0]);
+        let coverage = fields[3];
+        if fields[1] == "supported" {
+            let declaration = format!("fn {coverage}(");
+            assert!(
+                OPERATION_TESTS.contains(&declaration) || PATH_TESTS.contains(&declaration),
+                "{} names unknown executable coverage target {coverage}",
+                fields[0]
+            );
+        } else {
+            assert_eq!(coverage, "n/a", "{} exclusion coverage", fields[0]);
+        }
         assert!(
-            entries.insert(fields[0], fields[1]).is_none(),
+            entries.insert(fields[0], (fields[1], coverage)).is_none(),
             "duplicate operation {}",
             fields[0]
         );
@@ -112,7 +125,7 @@ fn support_matrix_is_complete_and_well_formed() {
     assert!(
         entries
             .iter()
-            .all(|(_, status)| matches!(*status, "supported" | "excluded")),
+            .all(|(_, (status, _))| matches!(*status, "supported" | "excluded")),
         "v1 operation matrix must not contain partial or gap rows: {entries:?}"
     );
 }

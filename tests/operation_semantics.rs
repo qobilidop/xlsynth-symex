@@ -2,13 +2,17 @@
 
 //! Differential semantic microtests for the pinned pure-value operation set.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_pir::ir_eval::{FnEvalResult, eval_fn};
 use xlsynth_pir::ir_parser::Parser;
-use xlsynth_symex::{SymbolicValue, evaluate_ir_package, evaluate_package};
+use xlsynth_symex::{
+    EvaluationInput, SymbolicValue, evaluate_ir_package, evaluate_ir_package_with_inputs,
+    evaluate_package, evaluate_package_with_inputs,
+};
 
 fn bits(width: usize, value: u64) -> IrValue {
     IrValue::make_ubits(width, value).unwrap()
@@ -25,6 +29,20 @@ fn flatten_ir_bits(value: &IrValue, output: &mut Vec<IrBits>) {
         }
     } else {
         output.push(value.to_bits().unwrap());
+    }
+}
+
+fn collect_named_ir_bits(value: &IrValue, name: &str, output: &mut BTreeMap<String, IrBits>) {
+    if let Ok(elements) = value.get_elements() {
+        for (index, element) in elements.iter().enumerate() {
+            collect_named_ir_bits(element, &format!("{name}_{index}"), output);
+        }
+    } else {
+        assert!(
+            output
+                .insert(name.to_owned(), value.to_bits().unwrap())
+                .is_none()
+        );
     }
 }
 
@@ -45,9 +63,38 @@ fn assert_symbolic_matches(ir: &str, function_name: &str, cases: &[Vec<IrValue>]
     let function = package.get_function(function_name).unwrap();
     let symbolic = evaluate_package(&package, function_name).unwrap();
     assert!(!cases.is_empty());
+    let mut all_symbolic_leaves = Vec::new();
+    for arg in &cases[0] {
+        flatten_ir_bits(arg, &mut all_symbolic_leaves);
+    }
+    assert_eq!(
+        symbolic.parameters.len(),
+        all_symbolic_leaves
+            .iter()
+            .filter(|bits| bits.get_bit_count() > 0)
+            .count()
+    );
     for args in cases {
         let expected = function.interpret(args).unwrap();
         assert_symbolic_value(&symbolic.result, &symbolic.parameters, args, &expected);
+    }
+
+    let representative = &cases[0];
+    let expected = function.interpret(representative).unwrap();
+    for concrete_index in 0..representative.len() {
+        let inputs = representative
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index == concrete_index {
+                    EvaluationInput::Concrete(value.clone())
+                } else {
+                    EvaluationInput::Symbolic
+                }
+            })
+            .collect::<Vec<_>>();
+        let mixed = evaluate_package_with_inputs(&package, function_name, &inputs).unwrap();
+        assert_symbolic_value(&mixed.result, &mixed.parameters, representative, &expected);
     }
 }
 
@@ -57,21 +104,19 @@ fn assert_symbolic_value(
     args: &[IrValue],
     expected: &IrValue,
 ) {
-    let mut input_leaves = Vec::new();
-    for arg in args {
-        flatten_ir_bits(arg, &mut input_leaves);
+    let mut input_leaves = BTreeMap::new();
+    for (index, arg) in args.iter().enumerate() {
+        collect_named_ir_bits(arg, &format!("symex_arg_{index}"), &mut input_leaves);
     }
-    assert_eq!(
-        parameters.len(),
-        input_leaves
-            .iter()
-            .filter(|bits| bits.get_bit_count() > 0)
-            .count()
-    );
     let bindings = parameters
         .iter()
-        .zip(input_leaves.iter().filter(|bits| bits.get_bit_count() > 0))
-        .map(|(parameter, value)| format!("({} {})", parameter.name, smt_bits(value)))
+        .map(|parameter| {
+            let value = input_leaves
+                .get(&parameter.name)
+                .unwrap_or_else(|| panic!("missing concrete value for {}", parameter.name));
+            assert_eq!(parameter.bit_count, value.get_bit_count());
+            format!("({} {})", parameter.name, smt_bits(value))
+        })
         .collect::<Vec<_>>()
         .join(" ");
     let mut symbolic_leaves = Vec::new();
@@ -367,6 +412,27 @@ top fn f(x: bits[8] id=1, y: bits[8] id=2, carry: bits[1] id=3, count: bits[4] i
             FnEvalResult::Failure(failure) => panic!("PIR evaluation failed: {failure:?}"),
         };
         assert_symbolic_value(&symbolic.result, &symbolic.parameters, &args, &expected);
+    }
+
+    let representative = vec![bits(8, 0x24), bits(8, 0xe1), bits(1, 1), bits(4, 3)];
+    let expected = match eval_fn(function, &representative) {
+        FnEvalResult::Success(success) => success.value,
+        FnEvalResult::Failure(failure) => panic!("PIR evaluation failed: {failure:?}"),
+    };
+    for concrete_index in 0..representative.len() {
+        let inputs = representative
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if index == concrete_index {
+                    EvaluationInput::Concrete(value.clone())
+                } else {
+                    EvaluationInput::Symbolic
+                }
+            })
+            .collect::<Vec<_>>();
+        let mixed = evaluate_ir_package_with_inputs(ir, "f", &inputs).unwrap();
+        assert_symbolic_value(&mixed.result, &mixed.parameters, &representative, &expected);
     }
 }
 

@@ -11,14 +11,17 @@ use xlsynth::{
     DslxConvertOptions, IrFunction, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name,
     optimize_ir,
 };
-use xlsynth_symex::{SymexResult, evaluate_package};
+use xlsynth_symex::{
+    EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput, PathResult,
+    SymexResult, enumerate_package, enumerate_package_with_inputs_and_options, evaluate_package,
+    evaluate_package_with_inputs,
+};
 
 const MANIFEST: &str = include_str!("corpus/curated/manifest.tsv");
 const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
 const UPSTREAM_REPOSITORY: &str = "https://github.com/xlsynth/xlsynth";
 const UPSTREAM_REVISION: &str = "12bb182e4d842228878d6caf5489df5565c81aa0";
 const XLS_REFERENCE_TRANSLATOR_BLOCKER: &str = "blocked:xls-reference-translator";
-const PATH_WITNESS_REPLAY_BLOCKER: &str = "blocked:selection-traces";
 
 type BitsInput = Vec<(usize, u64)>;
 
@@ -316,6 +319,261 @@ fn flatten_ir_bits(value: &IrValue, output: &mut Vec<(usize, u64)>) {
     }
 }
 
+fn smt_ir_value_bits(value: &IrValue) -> String {
+    let bits = value.to_bits().unwrap();
+    let mut result = String::from("#b");
+    for index in (0..bits.get_bit_count()).rev() {
+        result.push(if bits.get_bit(index).unwrap() {
+            '1'
+        } else {
+            '0'
+        });
+    }
+    result
+}
+
+fn assert_path_witness_replays(
+    entry: &ManifestEntry,
+    ir_form: IrForm,
+    package: &IrPackage,
+    function_name: &str,
+    function: &IrFunction,
+    path_index: usize,
+    path: &PathResult,
+) {
+    let expected = function
+        .interpret(&path.witness.inputs)
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} ({} path {path_index}): XLS witness replay failed: {error}",
+                entry.id,
+                ir_form.name()
+            )
+        });
+    let mut expected_leaves = Vec::new();
+    flatten_ir_bits(&expected, &mut expected_leaves);
+    let mut result_leaves = Vec::new();
+    path.result.flatten_bits(&mut result_leaves);
+    assert_eq!(result_leaves.len(), expected_leaves.len());
+    let bindings = path
+        .witness
+        .symbolic_leaves
+        .iter()
+        .map(|(name, value)| format!("({name} {})", smt_ir_value_bits(value)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let bind = |expression: &str| {
+        if bindings.is_empty() {
+            expression.to_owned()
+        } else {
+            format!("(let ({bindings}) {expression})")
+        }
+    };
+    let mut claims = result_leaves
+        .iter()
+        .zip(&expected_leaves)
+        .filter(|(actual, _)| actual.bit_count > 0)
+        .map(|(actual, (width, expected))| {
+            format!("(= {} (_ bv{expected} {width}))", bind(&actual.expression))
+        })
+        .collect::<Vec<_>>();
+    claims.push(bind(path.condition.as_smtlib()));
+    let query = format!("(assert (not (and {})))\n(check-sat)\n", claims.join(" "));
+    let mut child = Command::new("z3")
+        .arg("-in")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("z3 must be present in the development image");
+    child
+        .stdin
+        .take()
+        .expect("z3 stdin must be piped")
+        .write_all(query.as_bytes())
+        .expect("witness query must be writable");
+    let output = child.wait_with_output().expect("z3 must finish");
+    assert!(
+        output.status.success(),
+        "{} ({} path {path_index}) z3 failed: {}",
+        entry.id,
+        ir_form.name(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "unsat",
+        "{} ({} path {path_index}) witness does not satisfy its condition/result\n{query}",
+        entry.id,
+        ir_form.name()
+    );
+
+    let concrete_inputs = path
+        .witness
+        .inputs
+        .iter()
+        .cloned()
+        .map(EvaluationInput::Concrete)
+        .collect::<Vec<_>>();
+    let concrete_trace = enumerate_package_with_inputs_and_options(
+        package,
+        function_name,
+        &concrete_inputs,
+        &EnumerationOptions::default(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "{} ({} path {path_index}): concrete trace replay failed: {error}",
+            entry.id,
+            ir_form.name()
+        )
+    });
+    assert_eq!(
+        concrete_trace.completeness,
+        EnumerationCompleteness::Complete,
+        "{} ({} path {path_index}): concrete trace replay incomplete",
+        entry.id,
+        ir_form.name()
+    );
+    assert_eq!(
+        concrete_trace.paths.len(),
+        1,
+        "{} ({} path {path_index}): concrete inputs must determine one path",
+        entry.id,
+        ir_form.name()
+    );
+    assert_eq!(
+        concrete_trace.paths[0].trace,
+        path.trace,
+        "{} ({} path {path_index}): concrete and symbolic traces differ",
+        entry.id,
+        ir_form.name()
+    );
+}
+
+fn assert_complete_partition(
+    entry: &ManifestEntry,
+    ir_form: IrForm,
+    partition: &str,
+    merged: &SymexResult,
+    enumerated: &EnumerationResult,
+) {
+    assert_eq!(
+        enumerated.completeness,
+        EnumerationCompleteness::Complete,
+        "{} ({} {partition}): enumeration incomplete",
+        entry.id,
+        ir_form.name()
+    );
+    assert_eq!(
+        enumerated.parameters,
+        merged.parameters,
+        "{} ({} {partition}): merged/enumerated parameters differ",
+        entry.id,
+        ir_form.name()
+    );
+    let unique_traces = enumerated
+        .paths
+        .iter()
+        .map(|path| path.trace.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        unique_traces.len(),
+        enumerated.paths.len(),
+        "{} ({} {partition}): duplicate canonical traces",
+        entry.id,
+        ir_form.name()
+    );
+
+    let declarations = enumerated
+        .parameters
+        .iter()
+        .map(|parameter| {
+            format!(
+                "(declare-const {} (_ BitVec {}))\n",
+                parameter.name, parameter.bit_count
+            )
+        })
+        .collect::<String>();
+    let coverage = match enumerated.paths.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.condition.as_smtlib().to_owned(),
+        _ => format!(
+            "(or {})",
+            enumerated
+                .paths
+                .iter()
+                .map(|path| path.condition.as_smtlib())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    let mut merged_leaves = Vec::new();
+    merged.result.flatten_bits(&mut merged_leaves);
+    let implications = enumerated
+        .paths
+        .iter()
+        .map(|path| {
+            let mut path_leaves = Vec::new();
+            path.result.flatten_bits(&mut path_leaves);
+            assert_eq!(
+                path_leaves.len(),
+                merged_leaves.len(),
+                "{} ({} {partition}): result shapes differ",
+                entry.id,
+                ir_form.name()
+            );
+            let equalities = path_leaves
+                .iter()
+                .zip(&merged_leaves)
+                .filter(|(path, _)| path.bit_count > 0)
+                .map(|(path, merged)| format!("(= {} {})", path.expression, merged.expression))
+                .collect::<Vec<_>>();
+            let equality = match equalities.as_slice() {
+                [] => "true".to_owned(),
+                [only] => only.clone(),
+                _ => format!("(and {})", equalities.join(" ")),
+            };
+            format!("(=> {} {equality})", path.condition.as_smtlib())
+        })
+        .collect::<Vec<_>>();
+    let equivalence = match implications.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.clone(),
+        _ => format!("(and {})", implications.join(" ")),
+    };
+    let query =
+        format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
+    let mut child = Command::new("z3")
+        .arg("-in")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("z3 must be present in the development image");
+    child
+        .stdin
+        .take()
+        .expect("z3 stdin must be piped")
+        .write_all(query.as_bytes())
+        .expect("partition query must be writable");
+    let output = child.wait_with_output().expect("z3 must finish");
+    assert!(
+        output.status.success(),
+        "{} ({} {partition}) partition solver failed: {}",
+        entry.id,
+        ir_form.name(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "unsat",
+        "{} ({} {partition}): incomplete domain or piecewise mismatch\n{query}",
+        entry.id,
+        ir_form.name()
+    );
+}
+
 fn assert_differential_samples(
     entry: &ManifestEntry,
     ir_form: IrForm,
@@ -564,7 +822,7 @@ fn curated_manifest_and_validation_matrix_are_complete() {
             entry.id
         );
         assert_eq!(
-            entry.argument_partition, "all-symbolic",
+            entry.argument_partition, "all-symbolic,each-argument-concrete",
             "{} partition",
             entry.id
         );
@@ -677,14 +935,124 @@ fn symbolic_equivalence_checking() {
 }
 
 #[test]
-fn path_witness_replay_is_capability_gated() {
-    for validation in validation_entries() {
-        assert_eq!(
-            validation.path_witness_replay,
-            PATH_WITNESS_REPLAY_BLOCKER,
-            "{} {} path-witness replay status",
-            validation.id,
-            validation.ir_form.name()
-        );
+fn path_witness_replay() {
+    let mut matrix_mismatches = Vec::new();
+    for entry in manifest_entries() {
+        let (unoptimized, optimized, function_name) = compile_entry(&entry);
+        for (ir_form, package) in [
+            (IrForm::Unoptimized, &unoptimized),
+            (IrForm::Optimized, &optimized),
+        ] {
+            let validation = validation_entries()
+                .into_iter()
+                .find(|validation| validation.id == entry.id && validation.ir_form == ir_form)
+                .unwrap();
+            let expected_paths = validation
+                .path_witness_replay
+                .strip_prefix("pass:")
+                .and_then(|count| count.parse::<usize>().ok());
+            let enumerated = enumerate_package(package, &function_name).unwrap_or_else(|error| {
+                panic!(
+                    "{} ({}): path enumeration failed: {error}",
+                    entry.id,
+                    ir_form.name()
+                )
+            });
+            let merged = evaluate_package(package, &function_name).unwrap_or_else(|error| {
+                panic!(
+                    "{} ({}): merged evaluation failed during partition proof: {error}",
+                    entry.id,
+                    ir_form.name()
+                )
+            });
+            assert_complete_partition(&entry, ir_form, "all-symbolic", &merged, &enumerated);
+            if expected_paths != Some(enumerated.paths.len()) {
+                matrix_mismatches.push(format!(
+                    "{}\t{}\tpass:{} (recorded {})",
+                    entry.id,
+                    ir_form.name(),
+                    enumerated.paths.len(),
+                    validation.path_witness_replay
+                ));
+            }
+            let function = package.get_function(&function_name).unwrap();
+            for (path_index, path) in enumerated.paths.iter().enumerate() {
+                assert_path_witness_replays(
+                    &entry,
+                    ir_form,
+                    package,
+                    &function_name,
+                    &function,
+                    path_index,
+                    path,
+                );
+            }
+        }
+    }
+    assert!(
+        matrix_mismatches.is_empty(),
+        "path-witness validation matrix is stale:\n{}",
+        matrix_mismatches.join("\n")
+    );
+}
+
+#[test]
+fn mixed_argument_partition_witness_replay() {
+    for entry in manifest_entries() {
+        let concrete_args = make_ir_args(&entry, &entry.curated_vectors()[0]);
+        let (unoptimized, optimized, function_name) = compile_entry(&entry);
+        for (ir_form, package) in [
+            (IrForm::Unoptimized, &unoptimized),
+            (IrForm::Optimized, &optimized),
+        ] {
+            let function = package.get_function(&function_name).unwrap();
+            for concrete_index in 0..concrete_args.len() {
+                let inputs = concrete_args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if index == concrete_index {
+                            EvaluationInput::Concrete(value.clone())
+                        } else {
+                            EvaluationInput::Symbolic
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let enumerated = enumerate_package_with_inputs_and_options(
+                    package,
+                    &function_name,
+                    &inputs,
+                    &EnumerationOptions::default(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} ({} partition concrete:{concrete_index}): enumeration failed: {error}",
+                        entry.id,
+                        ir_form.name()
+                    )
+                });
+                let merged = evaluate_package_with_inputs(package, &function_name, &inputs)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{} ({} partition concrete:{concrete_index}): merged evaluation failed: {error}",
+                            entry.id,
+                            ir_form.name()
+                        )
+                    });
+                let partition = format!("concrete:{concrete_index}");
+                assert_complete_partition(&entry, ir_form, &partition, &merged, &enumerated);
+                for (path_index, path) in enumerated.paths.iter().enumerate() {
+                    assert_path_witness_replays(
+                        &entry,
+                        ir_form,
+                        package,
+                        &function_name,
+                        &function,
+                        path_index,
+                        path,
+                    );
+                }
+            }
+        }
     }
 }
