@@ -11,6 +11,7 @@ use xlsynth::{
     DslxConvertOptions, IrFunction, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name,
     optimize_ir,
 };
+use xlsynth_pir::random_inputs::generate_flat_bitvector_argument_sets_from_seed;
 use xlsynth_symex::{
     EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput, GuardedResult,
     SymexResult, enumerate_package, enumerate_package_with_inputs_and_options, evaluate_package,
@@ -155,15 +156,19 @@ impl<'a> ManifestEntry<'a> {
                 .collect();
         }
 
-        let mut rng = DeterministicRng::new(self.fuzz_seed);
-        (0..self.fuzz_cases)
-            .map(|_| {
-                self.input_widths()
-                    .iter()
-                    .map(|width| (*width, rng.next() & bit_mask(*width)))
-                    .collect()
-            })
-            .collect()
+        generate_flat_bitvector_argument_sets_from_seed(
+            self.input_widths(),
+            self.fuzz_seed,
+            self.fuzz_cases,
+        )
+        .into_iter()
+        .map(|arguments| {
+            arguments
+                .into_iter()
+                .map(|bits| (bits.get_bit_count(), bits.to_u64().unwrap()))
+                .collect()
+        })
+        .collect()
     }
 }
 
@@ -233,29 +238,6 @@ impl DifferentialMode {
             Self::CuratedVector => "curated-vector differential",
             Self::Fuzz => "differential fuzz",
         }
-    }
-}
-
-struct DeterministicRng(u64);
-
-impl DeterministicRng {
-    const fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-}
-
-const fn bit_mask(width: usize) -> u64 {
-    if width == 64 {
-        u64::MAX
-    } else {
-        (1_u64 << width) - 1
     }
 }
 
