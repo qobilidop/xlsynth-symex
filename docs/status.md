@@ -78,6 +78,7 @@ counts and per-function outcomes.
 - no path-witness replay or enumeration mutation harness;
 - incomplete pure-operation, arbitrary-width, and structured-value coverage;
   and
-- no checked-in normative operation/type support matrix.
+- operation and type gaps recorded in
+  [`support-matrix.tsv`](support-matrix.tsv) remain to be closed.
 
 The planned sequence for closing these gaps is in [`roadmap.md`](roadmap.md).

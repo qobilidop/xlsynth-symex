@@ -33,6 +33,8 @@ checked-in development environment shared with CI.
 - [Verification](docs/verification.md): the evidence required to call v1 done.
 - [Status](docs/status.md): the current implementation and validation snapshot.
 - [Roadmap](docs/roadmap.md): the path to v1 and optional work beyond it.
+- [Support matrix](docs/support-matrix.tsv): the pinned operation inventory and
+  current coverage gaps.
 - [Research](docs/research.md): prior art and evaluation sources.
 - [Historical notes](docs/notes/): superseded design discussion and prototype
   records.
