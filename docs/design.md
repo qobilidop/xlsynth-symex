@@ -88,7 +88,9 @@ f_i(\hat{s}) = f(i, \hat{s}).
 
 Operations fold concrete operands when possible. A concretely resolved select
 demands only its selected case, creates no symbolic fork for that choice, and
-does not visit unused case cones.
+does not visit unused case cones. Its resolved outcome is still recorded in the
+canonical trace, so a solver witness can be replayed against the same active
+choice map.
 
 Evaluation is demand-driven and memoized. Starting from the return node lets a
 concrete selector prune unused dependencies before they are constructed. Shared
@@ -132,6 +134,12 @@ For a completed enumeration:
 - every path has a concrete witness whose XLS replay agrees with its result and
   trace.
 
+Callers may restrict the covered input domain with backend-neutral constraints
+over symbolic input leaves. Path conditions include those assumptions, and
+`Complete` then means complete exactly within that declared domain. Callers may
+also set path and solver budgets; hitting one changes the result to
+`Incomplete`.
+
 ### Path and choice semantics
 
 XLS IR has no control-flow graph. It evaluates a dataflow graph eagerly and
@@ -173,6 +181,10 @@ It is a map, not a temporal sequence. Its identity is tied to the exact IR
 function, optimization state, node identities, concrete/symbolic input
 partition, demanded root, and path policy. It need not remain stable when any of
 those inputs change.
+
+Every demanded declared choice appears in the map. A concrete choice contributes
+one outcome without forking; a symbolic choice contributes one outcome to each
+feasible fork. A structurally inactive choice contributes no entry.
 
 For nested selections:
 
@@ -228,6 +240,11 @@ The backend-neutral representation provides expression sharing, concrete
 folding, simplification, deterministic serialization,
 merged-versus-enumerated comparison, and a stable boundary for future solver
 changes.
+
+Enumeration also reports expression size, evaluated-node and memoization
+counts, concrete and symbolic choice counts, solver-query outcomes, and
+construction and solver wall time. These measurements make performance limits
+observable without changing completeness semantics.
 
 ### Role of merged evaluation
 

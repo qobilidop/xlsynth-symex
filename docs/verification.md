@@ -87,7 +87,8 @@ with missing, duplicated, or mislabeled traces. The v1 harness combines:
 - canonical-trace uniqueness checks;
 - per-choice outcome and cross-choice trace coverage;
 - exhaustive comparison with concrete traces for bounded generated functions;
-- branch-flipping generation for uncovered neighboring outcomes;
+- a feasibility query for every neighboring outcome (the dataflow analogue of
+  systematic branch flipping);
 - witness replay for every feasible path;
 - comparison across concrete/symbolic argument partitions; and
 - mutation tests that omit, duplicate, relabel, weaken, strengthen, or
@@ -100,9 +101,10 @@ therefore release requirements.
 ## Coverage inventory
 
 The checked-in operation/type support matrix is normative for the pinned
-XLS/xlsynth toolchain. Tests cross-check every supported row against semantic
-microtests and ensure that exclusions remain explicit. IR-layer gaps may appear
-in pre-v1 status, but no in-scope pure value row may remain a gap at v1.
+XLS/xlsynth toolchain. Every supported row names an executable coverage target;
+tests cross-check those targets and ensure that exclusions remain explicit.
+IR-layer gaps may appear in pre-v1 status, but no in-scope pure value row may
+remain a gap at v1.
 
 Validation is layered:
 
@@ -114,7 +116,8 @@ Validation is layered:
    DSLX standard-library routines.
 4. **Deterministic generated functions** use fixed XLS fuzzer seeds and bounded
    graph sizes for broad operation, type, and trace coverage.
-5. **Historical crashers** preserve adversarial combinations.
+5. **Historical crashers**, when failures are found, preserve the minimized
+   adversarial combinations as permanent regressions.
 6. **Stress benchmarks** measure expression growth, path growth, pruning, and
    solver behavior without all becoming ordinary correctness gates.
 

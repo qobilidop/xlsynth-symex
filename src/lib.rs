@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Symbolic evaluation of pure XLS functions.
+//! Symbolic evaluation and exhaustive path generation for pure XLS functions.
 //!
-//! The evaluator translates supported XLS IR nodes into native symbolic
-//! expressions. XLS remains the concrete execution and independent SMT
+//! Canonical enumeration returns every feasible selection trace, its condition
+//! and residual value, and a concrete witness, with explicit complete or
+//! incomplete status. XLS remains the concrete execution and independent SMT
 //! reference boundary used by the validation suite.
 
 mod enumerator;

@@ -1,9 +1,10 @@
 # Roadmap
 
-This document describes how the current implementation reaches the v1 contract
-in [`design.md`](design.md). It expresses dependency order, not calendar dates.
-Measured current state belongs in [`status.md`](status.md), and release evidence
-belongs in [`verification.md`](verification.md).
+This document records the dependency order used to build the v1 review
+candidate described by [`design.md`](design.md). The stages are an
+implementation record, not a claim that v1 has been tagged or released.
+Measured candidate state belongs in [`status.md`](status.md), and the enduring
+release gate belongs in [`verification.md`](verification.md).
 
 Work proceeds in thin, independently validated vertical slices. Each stage
 keeps the XLS interpreter or JIT as an independent semantic oracle and updates
@@ -72,8 +73,8 @@ the status and validation reports when observed capabilities change.
 - Record construction time, solver time, expression sharing, path counts,
   pruned choices, visited nodes, and peak memory.
 - Run the complete release gate in [`verification.md`](verification.md).
-- Reconcile design, API docs, status, support matrix, and observed behavior
-  before tagging v1.
+- Reconcile design, API docs, status, support matrix, and observed behavior as
+  the v1 release gate.
 
 ## Beyond v1
 

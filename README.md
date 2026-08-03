@@ -14,6 +14,22 @@ The library is scoped to finite pure functions over bits, tuples, and fixed-size
 arrays. Stateful XLS constructs, hardware timing, unbounded memory, and
 whole-machine symbolic execution are outside the project boundary.
 
+## Use
+
+Parse an XLS package with `xlsynth`, then call `enumerate_package` for
+all-symbolic inputs or one of the mixed-input entry points. Always inspect
+`EnumerationResult::completeness` before treating the returned paths as full
+coverage.
+
+```text
+./dev.sh cargo run --example enumerate
+```
+
+Each feasible path contains its condition, residual symbolic value, canonical
+selection trace, and a solver-derived concrete XLS witness. The
+[`examples/enumerate.rs`](examples/enumerate.rs) program is a minimal complete
+example.
+
 ## Development
 
 Run project commands in the checked-in development container:
@@ -32,9 +48,10 @@ checked-in development environment shared with CI.
 - [V1 design](docs/design.md): the normative end state and project boundary.
 - [Verification](docs/verification.md): the evidence required to call v1 done.
 - [Status](docs/status.md): the current implementation and validation snapshot.
-- [Roadmap](docs/roadmap.md): the path to v1 and optional work beyond it.
+- [Roadmap](docs/roadmap.md): the v1 implementation record and optional work
+  beyond it.
 - [Support matrix](docs/support-matrix.tsv): the pinned operation inventory and
-  current coverage gaps.
+  executable coverage targets.
 - [Research](docs/research.md): prior art and evaluation sources.
 - [Historical notes](docs/notes/): superseded design discussion and prototype
   records.
