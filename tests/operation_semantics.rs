@@ -2,9 +2,9 @@
 
 //! Differential semantic microtests for the pinned pure-value operation set.
 
+mod common;
+
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_pir::ir_eval::{FnEvalResult, eval_fn};
@@ -13,6 +13,8 @@ use xlsynth_symex::{
     EvaluationInput, SymbolicValue, evaluate_ir_package, evaluate_ir_package_with_inputs,
     evaluate_package, evaluate_package_with_inputs,
 };
+
+use common::run_z3;
 
 fn bits(width: usize, value: u64) -> IrValue {
     IrValue::make_ubits(width, value).unwrap()
@@ -143,30 +145,8 @@ fn assert_symbolic_value(
         _ => format!("(and {})", equalities.join(" ")),
     };
     let query = format!("(assert (not {comparison}))\n(check-sat)\n");
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(query.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "unsat",
-        "symbolic value differs from XLS\n{query}"
-    );
+    let stdout = run_z3(&query, "operation-semantics query");
+    assert_eq!(stdout, "unsat", "symbolic value differs from XLS\n{query}");
 }
 
 #[test]

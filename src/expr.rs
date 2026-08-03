@@ -192,7 +192,9 @@ impl ExprArena {
             self.expect_sort(arg, Sort::Bool);
             match &self.nodes[arg.0].kind {
                 ExprKind::BoolConst(false) => return self.bool_const(false),
-                ExprKind::BoolConst(true) => {}
+                ExprKind::BoolConst(true) => {
+                    // `true` is the conjunction identity.
+                }
                 ExprKind::BoolAnd(nested) => flattened.extend(nested.iter().copied()),
                 _ => flattened.push(arg),
             }
@@ -215,7 +217,9 @@ impl ExprArena {
             self.expect_sort(arg, Sort::Bool);
             match &self.nodes[arg.0].kind {
                 ExprKind::BoolConst(true) => return self.bool_const(true),
-                ExprKind::BoolConst(false) => {}
+                ExprKind::BoolConst(false) => {
+                    // `false` is the disjunction identity.
+                }
                 ExprKind::BoolOr(nested) => flattened.extend(nested.iter().copied()),
                 _ => flattened.push(arg),
             }
@@ -386,7 +390,9 @@ impl ExprArena {
             return arg;
         }
         if let Some(bits) = self.bits_value(arg) {
-            let extracted = bits.width_slice(start as i64, width as i64);
+            let start = i64::try_from(start).expect("bit index must fit the XLS API");
+            let width = i64::try_from(width).expect("bit width must fit the XLS API");
+            let extracted = bits.width_slice(start, width);
             return self.bits_const(&extracted);
         }
         self.intern(ExprNode {
@@ -540,6 +546,8 @@ fn resize_low_bits(bits: &IrBits, width: usize, signed: bool) -> IrBits {
 
 fn constant_shift(lhs: &IrBits, rhs: &IrBits, operation: BitBinaryOp) -> IrBits {
     let width = lhs.get_bit_count();
+    // A shift amount too wide for u64 is necessarily at least the addressable
+    // left-hand width, so conversion failure has the same XLS overshift result.
     let shift = rhs
         .to_u64()
         .ok()
@@ -549,9 +557,9 @@ fn constant_shift(lhs: &IrBits, rhs: &IrBits, operation: BitBinaryOp) -> IrBits 
         return IrBits::from_lsb_is_0(&vec![fill; width]);
     };
     match operation {
-        BitBinaryOp::Shl => lhs.shll(shift as i64),
-        BitBinaryOp::Lshr => lhs.shrl(shift as i64),
-        BitBinaryOp::Ashr => lhs.shra(shift as i64),
+        BitBinaryOp::Shl => lhs.shll(i64::try_from(shift).expect("shift must fit the XLS API")),
+        BitBinaryOp::Lshr => lhs.shrl(i64::try_from(shift).expect("shift must fit the XLS API")),
+        BitBinaryOp::Ashr => lhs.shra(i64::try_from(shift).expect("shift must fit the XLS API")),
         _ => unreachable!("constant_shift requires a shift operation"),
     }
 }

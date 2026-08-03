@@ -135,10 +135,11 @@ For a completed enumeration:
   trace.
 
 Callers may restrict the covered input domain with backend-neutral constraints
-over symbolic input leaves. Path conditions include those assumptions, and
-`Complete` then means complete exactly within that declared domain. Callers may
-also set path and solver budgets; hitting one changes the result to
-`Incomplete`.
+over symbolic input leaves. A leaf is identified by its argument index and
+tuple/array element path, never by a solver-generated variable name. Path
+conditions include those assumptions, and `Complete` then means complete
+exactly within that declared domain. Callers may also set path and solver
+budgets; hitting one changes the result to `Incomplete`.
 
 ### Path and choice semantics
 

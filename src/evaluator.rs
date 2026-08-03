@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Merged symbolic evaluation for finite, pure XLS function values.
+//!
+//! Selection operations produce symbolic `ite` expressions here. The path
+//! enumerator reuses the same pure-node semantics while resolving demanded
+//! selections into explicit canonical outcomes.
+
+use std::fmt::Write as _;
+
 use xlsynth::{IrValue, XlsynthError};
 use xlsynth_pir::ir::{
     Binop, Fn, NaryOp, Node, NodePayload, NodeRef, Package, PackageMember, Type, Unop,
@@ -8,7 +16,8 @@ use xlsynth_pir::ir_parser::Parser;
 
 use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
 use crate::{
-    EvaluationInput, PathCondition, SymbolicBits, SymbolicParameter, SymbolicValue, SymexResult,
+    EvaluationInput, InputLeaf, PathCondition, SymbolicBits, SymbolicParameter, SymbolicValue,
+    SymexResult,
 };
 
 #[derive(Clone, Debug)]
@@ -83,6 +92,7 @@ fn evaluate_package_text_with_optional_inputs(
     evaluate_parsed(&package, function_name, inputs)
 }
 
+/// Removes dead nodes so unsupported inactive operations do not block evaluation.
 fn normalize_functions(package: &mut Package) {
     for member in &mut package.members {
         let function = match member {
@@ -94,6 +104,7 @@ fn normalize_functions(package: &mut Package) {
     }
 }
 
+/// Builds typed symbolic arguments and merged output for one package function.
 fn evaluate_parsed(
     package: &Package,
     function_name: &str,
@@ -119,11 +130,23 @@ fn evaluate_parsed(
         .enumerate()
         .map(|(index, parameter)| {
             let name = format!("symex_arg_{index}");
+            let input_leaf = InputLeaf::argument(index);
             match inputs.map(|inputs| &inputs[index]) {
-                Some(input) => {
-                    evaluation_input(&mut arena, &parameter.ty, input, &name, &mut parameters)
-                }
-                None => symbolic_input(&mut arena, &parameter.ty, &name, &mut parameters),
+                Some(input) => evaluation_input(
+                    &mut arena,
+                    &parameter.ty,
+                    input,
+                    &name,
+                    &input_leaf,
+                    &mut parameters,
+                ),
+                None => symbolic_input(
+                    &mut arena,
+                    &parameter.ty,
+                    &name,
+                    &input_leaf,
+                    &mut parameters,
+                ),
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -133,22 +156,38 @@ fn evaluate_parsed(
     }
     .evaluate_function(function, arguments)?;
     let result = materialize_value(&arena, &result);
-    let mut result_smtlib = parameters
-        .iter()
-        .map(|parameter| {
-            format!(
-                "(declare-const {} (_ BitVec {}))\n",
-                parameter.name, parameter.bit_count
-            )
-        })
-        .collect::<String>();
+    let mut result_smtlib = String::new();
+    for parameter in &parameters {
+        writeln!(
+            result_smtlib,
+            "(declare-const {} (_ BitVec {}))",
+            parameter.name, parameter.bit_count
+        )
+        .expect("writing to a String cannot fail");
+    }
     if let Some(bits) = result.as_bits()
         && bits.bit_count > 0
     {
-        result_smtlib.push_str(&format!(
-            "(define-fun xlsynth_symex_result () (_ BitVec {}) {})\n",
+        writeln!(
+            result_smtlib,
+            "(define-fun xlsynth_symex_result () (_ BitVec {}) {})",
             bits.bit_count, bits.expression
-        ));
+        )
+        .expect("writing to a String cannot fail");
+    } else if result.as_bits().is_none() {
+        let mut leaves = Vec::new();
+        result.flatten_bits(&mut leaves);
+        for (index, bits) in leaves.into_iter().enumerate() {
+            if bits.bit_count == 0 {
+                continue;
+            }
+            writeln!(
+                result_smtlib,
+                "(define-fun xlsynth_symex_result_leaf_{index} () (_ BitVec {}) {})",
+                bits.bit_count, bits.expression
+            )
+            .expect("writing to a String cannot fail");
+        }
     }
     Ok(SymexResult {
         path_condition: PathCondition::default(),
@@ -164,6 +203,7 @@ struct Evaluator<'a> {
 }
 
 impl Evaluator<'_> {
+    /// Evaluates a function in dependency order with explicit invoke/loop handling.
     fn evaluate_function(
         &mut self,
         function: &Fn,
@@ -349,10 +389,13 @@ impl Evaluator<'_> {
                         let induction = iteration.checked_mul(*stride).ok_or_else(|| {
                             symex_error("counted_for induction value overflowed usize")
                         })?;
+                        let induction = u64::try_from(induction).map_err(|_| {
+                            symex_error("counted_for induction value does not fit u64")
+                        })?;
                         let expression = if induction_width == 0 {
                             None
                         } else {
-                            Some(self.arena.bits_const_u64(induction_width, induction as u64))
+                            Some(self.arena.bits_const_u64(induction_width, induction))
                         };
                         let mut arguments = Vec::with_capacity(2 + invariants.len());
                         arguments.push(Value::Bits(bits(induction_width, expression)?));
@@ -388,6 +431,7 @@ fn apply_from_environment(
     apply_pure_node(arena, node, &operands)
 }
 
+/// Applies one non-control XLS node to already evaluated operand values.
 pub(crate) fn apply_pure_node(
     arena: &mut ExprArena,
     node: &Node,
@@ -605,13 +649,13 @@ pub(crate) fn apply_pure_node(
         }
         NodePayload::Sel { cases, default, .. } => {
             let selector = operand_bits(operands, 0, "sel selector")?;
-            let case_values = &operands[1..1 + cases.len()];
+            let case_values = &operands[1..=cases.len()];
             let default_value = default.map(|_| &operands[1 + cases.len()]);
             select_structural(arena, selector, case_values, default_value)?
         }
         NodePayload::PrioritySel { cases, default, .. } => {
             let selector = operand_bits(operands, 0, "priority_sel selector")?;
-            let case_values = &operands[1..1 + cases.len()];
+            let case_values = &operands[1..=cases.len()];
             let default_value = default
                 .map(|_| &operands[1 + cases.len()])
                 .ok_or_else(|| symex_error("priority_sel requires a default"))?;
@@ -619,7 +663,7 @@ pub(crate) fn apply_pure_node(
         }
         NodePayload::OneHotSel { cases, .. } => {
             let selector = operand_bits(operands, 0, "one_hot_sel selector")?;
-            one_hot_select(arena, selector, &operands[1..1 + cases.len()], &node.ty)?
+            one_hot_select(arena, selector, &operands[1..=cases.len()], &node.ty)?
         }
         NodePayload::ExtCarryOut { .. }
         | NodePayload::ExtPrioEncode { .. }
@@ -666,6 +710,7 @@ fn operand_bits<'a>(
     }
 }
 
+/// Models XLS zero-filled dynamic slicing without enumerating start values.
 fn dynamic_bit_slice(
     arena: &mut ExprArena,
     arg: &BitsValue,
@@ -690,6 +735,7 @@ fn dynamic_bit_slice(
     bits(width, Some(arena.extract(shifted, 0, width)))
 }
 
+/// Builds the merged result for every in-range dynamic update position.
 fn bit_slice_update(
     arena: &mut ExprArena,
     arg: &BitsValue,
@@ -728,6 +774,7 @@ fn bit_slice_update(
     bits(arg.bit_count, Some(result))
 }
 
+/// Recursively applies a multidimensional update with XLS no-op out-of-bounds behavior.
 fn array_update(
     arena: &mut ExprArena,
     array: &Value,
@@ -813,6 +860,7 @@ pub(crate) fn zero_value(arena: &mut ExprArena, ty: &Type) -> Result<Value, Xlsy
     }
 }
 
+/// Recursively bitwise-ORs equal-shaped values for `one_hot_sel` semantics.
 pub(crate) fn deep_or(
     arena: &mut ExprArena,
     lhs: &Value,
@@ -935,7 +983,9 @@ fn evaluate_encode(
     for index in 0..arg.bit_count {
         let bit = arena.extract(bits_expr(arg)?, index, 1);
         let selected = arena.bit_is_one(bit);
-        let index_expr = arena.bits_const_u64(result_width, index as u64);
+        let index =
+            u64::try_from(index).map_err(|_| symex_error("encode input index does not fit u64"))?;
+        let index_expr = arena.bits_const_u64(result_width, index);
         let with_index = arena.bit_binary(BitBinaryOp::Or, expression, index_expr);
         expression = arena.ite(selected, with_index, expression);
     }
@@ -1090,10 +1140,15 @@ fn evaluate_nary(
             NaryOp::Or => (BitBinaryOp::Or, false),
             NaryOp::Nor => (BitBinaryOp::Or, true),
             NaryOp::Xor => (BitBinaryOp::Xor, false),
-            _ => return Err(symex_error(format!("unsupported n-ary operation {op:?}"))),
+            NaryOp::Concat => {
+                return Err(symex_error("concat was not handled as a concatenation"));
+            }
         };
         let mut expressions = operands.iter().map(|operand| bits_expr(operand));
-        let mut result = expressions.next().transpose()?.unwrap();
+        let Some(first) = expressions.next() else {
+            return Err(symex_error("empty n-ary operation is unsupported"));
+        };
+        let mut result = first?;
         for operand in expressions {
             result = arena.bit_binary(binary_op, result, operand?);
         }
@@ -1106,6 +1161,7 @@ fn evaluate_nary(
     bits(result_width, Some(expression))
 }
 
+/// Applies a bit-vector selector independently to every leaf of a structural value.
 fn select_structural(
     arena: &mut ExprArena,
     selector: &BitsValue,
@@ -1251,7 +1307,10 @@ fn evaluate_sel(
     {
         return Err(symex_error("select case widths do not match result"));
     }
-    let mut expression = bits_expr(default.unwrap_or(cases.last().unwrap()))?;
+    let fallback = default
+        .or_else(|| cases.last().copied())
+        .ok_or_else(|| symex_error("select has no cases or default"))?;
+    let mut expression = bits_expr(fallback)?;
     for (index, case) in cases.iter().enumerate().rev() {
         let condition = selector_equals(arena, selector, index)?;
         expression = arena.ite(condition, bits_expr(case)?, expression);
@@ -1304,6 +1363,7 @@ fn comparison(
     Ok(arena.bool_to_bit(condition))
 }
 
+/// Adapts SMT division to XLS's explicit divide-by-zero result.
 fn xls_div(
     arena: &mut ExprArena,
     lhs: &BitsValue,
@@ -1337,6 +1397,7 @@ fn xls_div(
     Ok(arena.ite(rhs_is_zero, fallback, quotient))
 }
 
+/// Adapts SMT remainder to XLS's zero-divisor result.
 fn xls_mod(
     arena: &mut ExprArena,
     lhs: &BitsValue,
@@ -1432,16 +1493,19 @@ fn get_bits(values: &[Option<Value>], node_ref: NodeRef) -> Result<&BitsValue, X
     }
 }
 
+/// Recursively creates symbolic leaves with stable structural and SMT identities.
 pub(crate) fn symbolic_input(
     arena: &mut ExprArena,
     ty: &Type,
     name: &str,
+    input_leaf: &InputLeaf,
     parameters: &mut Vec<SymbolicParameter>,
 ) -> Result<Value, XlsynthError> {
     match ty {
         Type::Bits(0) => Ok(Value::Bits(bits(0, None)?)),
         Type::Bits(bit_count) => {
             parameters.push(SymbolicParameter {
+                input: input_leaf.clone(),
                 name: name.to_owned(),
                 bit_count: *bit_count,
             });
@@ -1455,7 +1519,13 @@ pub(crate) fn symbolic_input(
                 .iter()
                 .enumerate()
                 .map(|(index, element_type)| {
-                    symbolic_input(arena, element_type, &format!("{name}_{index}"), parameters)
+                    symbolic_input(
+                        arena,
+                        element_type,
+                        &format!("{name}_{index}"),
+                        &input_leaf.clone().element(index),
+                        parameters,
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         )),
@@ -1466,6 +1536,7 @@ pub(crate) fn symbolic_input(
                         arena,
                         &array.element_type,
                         &format!("{name}_{index}"),
+                        &input_leaf.clone().element(index),
                         parameters,
                     )
                 })
@@ -1477,15 +1548,17 @@ pub(crate) fn symbolic_input(
     }
 }
 
+/// Validates and lowers one mixed concrete/symbolic caller argument.
 pub(crate) fn evaluation_input(
     arena: &mut ExprArena,
     ty: &Type,
     input: &EvaluationInput,
     name: &str,
+    input_leaf: &InputLeaf,
     parameters: &mut Vec<SymbolicParameter>,
 ) -> Result<Value, XlsynthError> {
     match input {
-        EvaluationInput::Symbolic => symbolic_input(arena, ty, name, parameters),
+        EvaluationInput::Symbolic => symbolic_input(arena, ty, name, input_leaf, parameters),
         EvaluationInput::Concrete(value) => literal_value(arena, ty, value),
         EvaluationInput::Tuple(inputs) => {
             let Type::Tuple(element_types) = ty else {
@@ -1511,6 +1584,7 @@ pub(crate) fn evaluation_input(
                             element_type,
                             input,
                             &format!("{name}_{index}"),
+                            &input_leaf.clone().element(index),
                             parameters,
                         )
                     })
@@ -1540,6 +1614,7 @@ pub(crate) fn evaluation_input(
                             &array_type.element_type,
                             input,
                             &format!("{name}_{index}"),
+                            &input_leaf.clone().element(index),
                             parameters,
                         )
                     })

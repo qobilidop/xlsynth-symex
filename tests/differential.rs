@@ -2,11 +2,12 @@
 
 //! Semantic differential tests for the upstream-backed vertical slice.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+mod common;
 
 use xlsynth::{IrPackage, IrValue};
 use xlsynth_symex::{SymexResult, evaluate};
+
+use common::run_z3;
 
 fn assert_smt_result(result: &SymexResult, width: usize, args: &[u64], expected: u64) {
     assert_eq!(result.parameters.len(), args.len());
@@ -25,29 +26,9 @@ fn assert_smt_result(result: &SymexResult, width: usize, args: &[u64], expected:
         "(assert (let ({bindings}) (not (= {} (_ bv{expected} {width})))))\n(check-sat)\n",
         result.result.as_bits().unwrap().expression
     );
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("z3 must be present in the development image");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(query.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "z3 failed\nstdout: {}\nstderr: {}\nquery:\n{query}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stdout = run_z3(&query, "symbolic differential query");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "unsat",
+        stdout, "unsat",
         "SMT result differs from interpreter\nquery:\n{query}"
     );
 }

@@ -25,6 +25,8 @@ The evaluator currently:
   input leaves;
 - represents bits and Boolean constraints with a typed, interned expression
   DAG and emits deterministic SMT-LIB at the solver boundary;
+- identifies constraint inputs structurally, independently of rendered solver
+  variable names;
 - supports all pinned in-scope pure value operations, including arbitrary- and
   zero-width bits, nested arrays, structured gates and one-hot selects,
   multidimensional indexing/update, and `xlsynth-pir` extension desugaring;

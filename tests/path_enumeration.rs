@@ -2,17 +2,20 @@
 
 //! End-to-end checks for canonical path enumeration and witness replay.
 
+mod common;
+
 use std::collections::BTreeSet;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_symex::{
     ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
     EnumerationOptions, EnumerationResult, EvaluationInput, IncompleteReason, InputConstraint,
-    PathResult, SymbolicValue, enumerate_package, enumerate_package_with_inputs_and_options,
-    enumerate_package_with_options, enumerate_with_inputs, evaluate_package,
+    InputLeaf, PathResult, SymbolicValue, enumerate_package,
+    enumerate_package_with_inputs_and_options, enumerate_package_with_options,
+    enumerate_with_inputs, evaluate_package,
 };
+
+use common::run_z3;
 
 fn parse(ir: &str, function_name: &str) -> (IrPackage, xlsynth::IrFunction) {
     let package = IrPackage::parse_ir(ir, None).unwrap();
@@ -54,7 +57,13 @@ fn assert_witness_replays(function: &xlsynth::IrFunction, path: &PathResult) {
         .witness
         .symbolic_leaves
         .iter()
-        .map(|(name, value)| format!("({name} {})", smt_bits(&value.to_bits().unwrap())))
+        .map(|(parameter, value)| {
+            format!(
+                "({} {})",
+                parameter.name,
+                smt_bits(&value.to_bits().unwrap())
+            )
+        })
         .collect::<Vec<_>>()
         .join(" ");
     let bind = |expression: &str| {
@@ -77,28 +86,9 @@ fn assert_witness_replays(function: &xlsynth::IrFunction, path: &PathResult) {
         "(assert (not (and {})))\n(check-sat)\n",
         equalities.join(" ")
     );
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(query.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stdout = run_z3(&query, "path-witness replay query");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "unsat",
+        stdout, "unsat",
         "witness result or condition disagrees with XLS\n{query}"
     );
 }
@@ -181,28 +171,9 @@ fn assert_complete_partition_in_domain(
     let query = format!(
         "{declarations}(assert (or (not (= {coverage} {domain})) (not {equivalence})))\n(check-sat)\n"
     );
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(query.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stdout = run_z3(&query, "path-partition query");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "unsat",
+        stdout, "unsat",
         "path domain is incomplete or piecewise result differs from merged evaluation\n{query}"
     );
 }
@@ -487,7 +458,7 @@ top fn select(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
         max_paths: None,
         constraints: vec![InputConstraint::Compare {
             operation: ConstraintComparison::UnsignedLessThan,
-            lhs: ConstraintTerm::Input("symex_arg_0".to_owned()),
+            lhs: ConstraintTerm::Input(InputLeaf::argument(0)),
             rhs: ConstraintTerm::Constant(IrValue::make_ubits(2, 2).unwrap()),
         }],
         ..EnumerationOptions::default()
@@ -514,13 +485,51 @@ top fn select(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
         max_paths: None,
         constraints: vec![InputConstraint::Compare {
             operation: ConstraintComparison::Equal,
-            lhs: ConstraintTerm::Input("missing".to_owned()),
+            lhs: ConstraintTerm::Input(InputLeaf::argument(99)),
             rhs: ConstraintTerm::Constant(IrValue::make_ubits(2, 0).unwrap()),
         }],
         ..EnumerationOptions::default()
     };
     let error = enumerate_package_with_options(&package, "select", &invalid).unwrap_err();
-    assert!(error.to_string().contains("unknown input leaf \"missing\""));
+    assert!(error.to_string().contains("non-symbolic input leaf"));
+}
+
+#[test]
+fn constraints_address_structural_leaves_without_solver_names() {
+    let ir = r#"package test
+
+top fn select(input: (bits[1], bits[1]) id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
+  selector: bits[1] = tuple_index(input, index=1, id=4)
+  ret result: bits[8] = sel(selector, cases=[a, b], id=5)
+}
+"#;
+    let (package, function) = parse(ir, "select");
+    let selector_leaf = InputLeaf::argument(0).element(1);
+    let options = EnumerationOptions {
+        max_paths: None,
+        constraints: vec![InputConstraint::Compare {
+            operation: ConstraintComparison::Equal,
+            lhs: ConstraintTerm::Input(selector_leaf.clone()),
+            rhs: ConstraintTerm::Constant(IrValue::make_ubits(1, 1).unwrap()),
+        }],
+        ..EnumerationOptions::default()
+    };
+
+    let result = enumerate_package_with_options(&package, "select", &options).unwrap();
+
+    assert_eq!(result.completeness, EnumerationCompleteness::Complete);
+    assert_eq!(result.paths.len(), 1);
+    assert_eq!(
+        outcomes(&result.paths),
+        BTreeSet::from([ChoiceOutcome::Case(1)])
+    );
+    assert!(
+        result
+            .parameters
+            .iter()
+            .any(|parameter| parameter.input == selector_leaf)
+    );
+    assert_witness_replays(&function, &result.paths[0]);
 }
 
 #[test]

@@ -2,10 +2,10 @@
 
 //! Offline, provenance-pinned validation of curated upstream XLS examples.
 
+mod common;
+
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use xlsynth::{
     DslxConvertOptions, IrFunction, IrPackage, IrValue, convert_dslx_to_ir, mangle_dslx_name,
@@ -16,6 +16,8 @@ use xlsynth_symex::{
     SymexResult, enumerate_package, enumerate_package_with_inputs_and_options, evaluate_package,
     evaluate_package_with_inputs,
 };
+
+use common::run_z3;
 
 const MANIFEST: &str = include_str!("corpus/curated/manifest.tsv");
 const VALIDATION_MATRIX: &str = include_str!("corpus/curated/validation.tsv");
@@ -359,7 +361,7 @@ fn assert_path_witness_replays(
         .witness
         .symbolic_leaves
         .iter()
-        .map(|(name, value)| format!("({name} {})", smt_ir_value_bits(value)))
+        .map(|(parameter, value)| format!("({} {})", parameter.name, smt_ir_value_bits(value)))
         .collect::<Vec<_>>()
         .join(" ");
     let bind = |expression: &str| {
@@ -379,29 +381,14 @@ fn assert_path_witness_replays(
         .collect::<Vec<_>>();
     claims.push(bind(path.condition.as_smtlib()));
     let query = format!("(assert (not (and {})))\n(check-sat)\n", claims.join(" "));
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("z3 must be present in the development image");
-    child
-        .stdin
-        .take()
-        .expect("z3 stdin must be piped")
-        .write_all(query.as_bytes())
-        .expect("witness query must be writable");
-    let output = child.wait_with_output().expect("z3 must finish");
-    assert!(
-        output.status.success(),
-        "{} ({} path {path_index}) z3 failed: {}",
+    let context = format!(
+        "{} ({} path {path_index}) witness",
         entry.id,
-        ir_form.name(),
-        String::from_utf8_lossy(&output.stderr)
+        ir_form.name()
     );
+    let stdout = run_z3(&query, &context);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        stdout,
         "unsat",
         "{} ({} path {path_index}) witness does not satisfy its condition/result\n{query}",
         entry.id,
@@ -544,29 +531,10 @@ fn assert_complete_partition(
     };
     let query =
         format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("z3 must be present in the development image");
-    child
-        .stdin
-        .take()
-        .expect("z3 stdin must be piped")
-        .write_all(query.as_bytes())
-        .expect("partition query must be writable");
-    let output = child.wait_with_output().expect("z3 must finish");
-    assert!(
-        output.status.success(),
-        "{} ({} {partition}) partition solver failed: {}",
-        entry.id,
-        ir_form.name(),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let context = format!("{} ({} {partition}) partition", entry.id, ir_form.name());
+    let stdout = run_z3(&query, &context);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        stdout,
         "unsat",
         "{} ({} {partition}): incomplete domain or piecewise mismatch\n{query}",
         entry.id,
@@ -652,32 +620,16 @@ fn assert_differential_samples(
         "{candidate}(assert (or\n  {}))\n(check-sat)\n",
         mismatches.join("\n  ")
     );
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("z3 must be present in the development image");
-    child
-        .stdin
-        .take()
-        .expect("z3 stdin must be piped")
-        .write_all(query.as_bytes())
-        .expect("SMT query must be writable");
-    let output = child.wait_with_output().expect("z3 must finish");
-    assert!(
-        output.status.success(),
-        "{} ({}, {}) z3 failed for {} samples\nstdout: {}\nstderr: {}",
+    let context = format!(
+        "{} ({}, {}) differential over {} samples",
         entry.id,
         ir_form.name(),
         mode.name(),
-        samples.len(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        samples.len()
     );
+    let stdout = run_z3(&query, &context);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        stdout,
         "unsat",
         "{} ({}) failed {} testing over {} samples (seed {:016x})",
         entry.id,
@@ -749,30 +701,10 @@ fn assert_symbolic_equivalence(
         "{}\n{reference}\n(assert (not {comparison}))\n(check-sat)\n",
         symbolic.result_smtlib
     );
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("z3 must be present in the development image");
-    child
-        .stdin
-        .take()
-        .expect("z3 stdin must be piped")
-        .write_all(query.as_bytes())
-        .expect("equivalence query must be writable");
-    let output = child.wait_with_output().expect("z3 must finish");
-    assert!(
-        output.status.success(),
-        "{} ({}) symbolic equivalence solver failed\nstdout: {}\nstderr: {}\nquery:\n{query}",
-        entry.id,
-        ir_form.name(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    let context = format!("{} ({}) symbolic equivalence", entry.id, ir_form.name());
+    let stdout = run_z3(&query, &context);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
+        stdout,
         "unsat",
         "{} ({}) native result is not symbolically equivalent to XLS\nquery:\n{query}",
         entry.id,

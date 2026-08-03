@@ -88,6 +88,52 @@ pub struct ChoiceId {
     pub invocation: Vec<InvocationFrame>,
 }
 
+/// Structural identity of one bits leaf in the function arguments.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct InputLeaf {
+    argument_index: usize,
+    element_path: Vec<usize>,
+}
+
+impl InputLeaf {
+    /// Identifies a bits-typed argument with no structural descent.
+    #[must_use]
+    pub const fn argument(argument_index: usize) -> Self {
+        Self {
+            argument_index,
+            element_path: Vec::new(),
+        }
+    }
+
+    /// Identifies a leaf by argument index and tuple/array element indices.
+    #[must_use]
+    pub const fn new(argument_index: usize, element_path: Vec<usize>) -> Self {
+        Self {
+            argument_index,
+            element_path,
+        }
+    }
+
+    /// Descends into one tuple or array element.
+    #[must_use]
+    pub fn element(mut self, index: usize) -> Self {
+        self.element_path.push(index);
+        self
+    }
+
+    /// Returns the zero-based function argument index.
+    #[must_use]
+    pub const fn argument_index(&self) -> usize {
+        self.argument_index
+    }
+
+    /// Returns tuple/array element indices from the argument root to the leaf.
+    #[must_use]
+    pub fn element_path(&self) -> &[usize] {
+        &self.element_path
+    }
+}
+
 /// Canonical outcome at an active choice node.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ChoiceOutcome {
@@ -104,8 +150,8 @@ pub enum ChoiceOutcome {
 pub struct PathWitness {
     /// Complete typed function arguments in signature order.
     pub inputs: Vec<IrValue>,
-    /// Model values for symbolic bits leaves, keyed by stable parameter name.
-    pub symbolic_leaves: BTreeMap<String, IrValue>,
+    /// Model values keyed by complete symbolic-parameter metadata.
+    pub symbolic_leaves: BTreeMap<SymbolicParameter, IrValue>,
 }
 
 /// One feasible canonical symbolic path.
@@ -152,8 +198,8 @@ pub enum EnumerationCompleteness {
 /// Backend-neutral bit-vector term used in caller assumptions.
 #[derive(Clone, Debug)]
 pub enum ConstraintTerm {
-    /// A symbolic bits leaf named by [`SymbolicParameter::name`].
-    Input(String),
+    /// A symbolic bits leaf identified independently of solver rendering.
+    Input(InputLeaf),
     /// A bits-typed XLS constant.
     Constant(IrValue),
     /// Bitwise complement.
@@ -219,9 +265,8 @@ pub struct EnumerationOptions {
     pub max_paths: Option<usize>,
     /// Caller assumptions conjoined with every path condition.
     ///
-    /// Constraints refer to symbolic leaf names exposed by
-    /// [`SymbolicParameter::name`]. A completed result covers exactly the
-    /// domain satisfying these assumptions.
+    /// Constraints use structural [`InputLeaf`] identifiers. A completed result
+    /// covers exactly the domain satisfying these assumptions.
     pub constraints: Vec<InputConstraint>,
     /// Per-query solver timeout.
     ///
@@ -277,9 +322,11 @@ pub struct EnumerationStatistics {
 }
 
 /// One symbolic bits-typed function parameter.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SymbolicParameter {
-    /// Stable SMT-LIB identifier assigned by parameter position.
+    /// Structural input leaf represented by this parameter.
+    pub input: InputLeaf,
+    /// Stable SMT-LIB identifier derived from argument and element positions.
     pub name: String,
     /// Parameter width in bits.
     pub bit_count: usize,
@@ -290,7 +337,7 @@ pub struct SymbolicParameter {
 pub struct SymbolicBits {
     /// Width of the expression in bits.
     pub bit_count: usize,
-    /// SMT-LIB bit-vector expression.
+    /// SMT-LIB bit-vector expression, empty only for `bits[0]`.
     pub expression: String,
 }
 
@@ -337,7 +384,10 @@ pub struct SymexResult {
     pub parameters: Vec<SymbolicParameter>,
     /// Native symbolic result expression.
     pub result: SymbolicValue,
-    /// Self-contained SMT-LIB declarations for the parameters and result.
+    /// Self-contained SMT-LIB declarations for parameters and nonzero result leaves.
+    ///
+    /// A bits-typed result is named `xlsynth_symex_result`. Structural result
+    /// leaves are named `xlsynth_symex_result_leaf_N` in flattening order.
     pub result_smtlib: String,
 }
 
@@ -345,11 +395,21 @@ pub struct SymexResult {
 ///
 /// This entry point parses the function's standalone IR text. Functions that
 /// invoke other functions require [`evaluate_package`] so callees are present.
+///
+/// # Errors
+///
+/// Returns an error if IR conversion or validation fails, or if the function
+/// contains a value shape or operation outside the supported pure-function scope.
 pub fn evaluate(function: &IrFunction) -> Result<SymexResult, XlsynthError> {
     evaluator::evaluate_function_text(&function.to_ir_string()?)
 }
 
 /// Symbolically evaluates a leaf function with mixed concrete/symbolic inputs.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`evaluate`], or when
+/// the supplied inputs do not match the function signature.
 pub fn evaluate_with_inputs(
     function: &IrFunction,
     inputs: &[EvaluationInput],
@@ -360,6 +420,11 @@ pub fn evaluate_with_inputs(
 /// Symbolically evaluates a named pure XLS function with its owning package.
 ///
 /// Package evaluation supports calls to other functions in the same package.
+///
+/// # Errors
+///
+/// Returns an error if the function is absent, package validation fails, or
+/// evaluation reaches an unsupported value shape or operation.
 pub fn evaluate_package(
     package: &IrPackage,
     function_name: &str,
@@ -371,6 +436,11 @@ pub fn evaluate_package(
 ///
 /// This boundary also accepts the pinned `xlsynth-pir` extension operations,
 /// which are desugared to ordinary XLS value operations before evaluation.
+///
+/// # Errors
+///
+/// Returns an error if parsing, validation, extension desugaring, function
+/// lookup, or symbolic evaluation fails.
 pub fn evaluate_ir_package(
     package_ir: &str,
     function_name: &str,
@@ -379,6 +449,11 @@ pub fn evaluate_ir_package(
 }
 
 /// Symbolically evaluates textual XLS/PIR package IR with mixed inputs.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`evaluate_ir_package`],
+/// or when the supplied inputs do not match the function signature.
 pub fn evaluate_ir_package_with_inputs(
     package_ir: &str,
     function_name: &str,
@@ -388,6 +463,11 @@ pub fn evaluate_ir_package_with_inputs(
 }
 
 /// Symbolically evaluates a package function with mixed concrete/symbolic inputs.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`evaluate_package`], or
+/// when the supplied inputs do not match the function signature.
 pub fn evaluate_package_with_inputs(
     package: &IrPackage,
     function_name: &str,
@@ -397,6 +477,11 @@ pub fn evaluate_package_with_inputs(
 }
 
 /// Enumerates every feasible canonical path through a leaf pure XLS function.
+///
+/// # Errors
+///
+/// Returns an error if IR conversion, path construction, or witness
+/// reconstruction fails. Solver indeterminacy is reported as incompleteness.
 pub fn enumerate(function: &IrFunction) -> Result<EnumerationResult, XlsynthError> {
     enumerator::enumerate_function_text(
         &function.to_ir_string()?,
@@ -406,6 +491,11 @@ pub fn enumerate(function: &IrFunction) -> Result<EnumerationResult, XlsynthErro
 }
 
 /// Enumerates canonical paths through an all-symbolic leaf function with options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate`], or when
+/// a caller constraint is ill-typed or references a non-symbolic leaf.
 pub fn enumerate_with_options(
     function: &IrFunction,
     options: &EnumerationOptions,
@@ -414,6 +504,11 @@ pub fn enumerate_with_options(
 }
 
 /// Enumerates canonical paths through a leaf function with mixed inputs.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate`], or when
+/// the supplied inputs do not match the function signature.
 pub fn enumerate_with_inputs(
     function: &IrFunction,
     inputs: &[EvaluationInput],
@@ -426,6 +521,11 @@ pub fn enumerate_with_inputs(
 }
 
 /// Enumerates canonical paths through a leaf function with explicit options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate_with_inputs`]
+/// or [`enumerate_with_options`].
 pub fn enumerate_with_inputs_and_options(
     function: &IrFunction,
     inputs: &[EvaluationInput],
@@ -435,6 +535,11 @@ pub fn enumerate_with_inputs_and_options(
 }
 
 /// Enumerates canonical paths through a named function and its owning package.
+///
+/// # Errors
+///
+/// Returns an error if the function is absent, package conversion fails, or
+/// path construction or witness reconstruction fails.
 pub fn enumerate_package(
     package: &IrPackage,
     function_name: &str,
@@ -448,6 +553,11 @@ pub fn enumerate_package(
 }
 
 /// Enumerates an all-symbolic package function with explicit options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate_package`],
+/// or when a caller constraint is invalid.
 pub fn enumerate_package_with_options(
     package: &IrPackage,
     function_name: &str,
@@ -457,6 +567,11 @@ pub fn enumerate_package_with_options(
 }
 
 /// Enumerates a named function in textual XLS/PIR package IR.
+///
+/// # Errors
+///
+/// Returns an error if parsing, validation, extension desugaring, function
+/// lookup, path construction, or witness reconstruction fails.
 pub fn enumerate_ir_package(
     package_ir: &str,
     function_name: &str,
@@ -470,6 +585,11 @@ pub fn enumerate_ir_package(
 }
 
 /// Enumerates all-symbolic paths in textual XLS/PIR package IR with options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate_ir_package`],
+/// or when a caller constraint is invalid.
 pub fn enumerate_ir_package_with_options(
     package_ir: &str,
     function_name: &str,
@@ -479,6 +599,11 @@ pub fn enumerate_ir_package_with_options(
 }
 
 /// Enumerates package-function paths with mixed inputs and default options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by [`enumerate_package`],
+/// or when the supplied inputs do not match the function signature.
 pub fn enumerate_package_with_inputs(
     package: &IrPackage,
     function_name: &str,
@@ -493,6 +618,11 @@ pub fn enumerate_package_with_inputs(
 }
 
 /// Enumerates package-function paths with mixed inputs and explicit options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by
+/// [`enumerate_package_with_inputs`] or [`enumerate_package_with_options`].
 pub fn enumerate_package_with_inputs_and_options(
     package: &IrPackage,
     function_name: &str,
@@ -503,6 +633,12 @@ pub fn enumerate_package_with_inputs_and_options(
 }
 
 /// Enumerates textual package-function paths with mixed inputs and options.
+///
+/// # Errors
+///
+/// Returns an error under the conditions documented by
+/// [`enumerate_ir_package_with_options`], or when the supplied inputs do not
+/// match the function signature.
 pub fn enumerate_ir_package_with_inputs_and_options(
     package_ir: &str,
     function_name: &str,
@@ -536,10 +672,12 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
             result.parameters,
             vec![
                 SymbolicParameter {
+                    input: InputLeaf::argument(0),
                     name: "symex_arg_0".to_owned(),
                     bit_count: 8,
                 },
                 SymbolicParameter {
+                    input: InputLeaf::argument(1),
                     name: "symex_arg_1".to_owned(),
                     bit_count: 8,
                 },
@@ -565,6 +703,7 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
         )
         .unwrap();
         assert_eq!(mixed.parameters.len(), 1);
+        assert_eq!(mixed.parameters[0].input, InputLeaf::argument(1));
         assert_eq!(mixed.parameters[0].name, "symex_arg_1");
         assert_eq!(
             mixed.result.as_bits().unwrap().expression,
@@ -581,6 +720,28 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
         .unwrap();
         assert!(concrete.parameters.is_empty());
         assert_eq!(concrete.result.as_bits().unwrap().expression, "#b00000111");
+    }
+
+    #[test]
+    fn emits_named_definitions_for_structural_result_leaves() {
+        let ir = r"package test
+
+top fn pair(x: bits[8]) -> (bits[8], bits[8]) {
+  complement: bits[8] = not(x)
+  ret result: (bits[8], bits[8]) = tuple(x, complement)
+}
+";
+        let package = IrPackage::parse_ir(ir, None).unwrap();
+        let function = package.get_function("pair").unwrap();
+
+        let result = evaluate(&function).unwrap();
+
+        assert_eq!(
+            result.result_smtlib,
+            "(declare-const symex_arg_0 (_ BitVec 8))\n\
+             (define-fun xlsynth_symex_result_leaf_0 () (_ BitVec 8) symex_arg_0)\n\
+             (define-fun xlsynth_symex_result_leaf_1 () (_ BitVec 8) (bvnot symex_arg_0))\n"
+        );
     }
 
     #[test]

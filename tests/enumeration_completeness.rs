@@ -2,15 +2,17 @@
 
 //! Independent bounded trace-set and enumeration-mutation release checks.
 
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use xlsynth::IrPackage;
 use xlsynth_symex::{
     ChoiceId, ChoiceOutcome, EnumerationCompleteness, EnumerationResult, InvocationFrame,
     enumerate_package, evaluate_package,
 };
+
+use common::run_z3;
 
 #[derive(Clone, Debug)]
 enum SelectionTree {
@@ -262,30 +264,7 @@ fn verifier_accepts(
     );
     let query =
         format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
-    run_z3(&query) == "unsat"
-}
-
-fn run_z3(query: &str) -> String {
-    let mut child = Command::new("z3")
-        .arg("-in")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(query.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    run_z3(&query, "enumeration-completeness query") == "unsat"
 }
 
 #[test]

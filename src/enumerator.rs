@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+//! Canonical path enumeration over demanded XLS selection operations.
+//!
+//! The evaluator forks at active `sel`, `priority_sel`, and `one_hot_sel`
+//! nodes. Choices in structurally inactive dataflow remain absent from the
+//! trace, and solver feasibility pruning turns syntactic candidates into paths.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 use xlsynth::{IrBits, IrValue, XlsynthError};
@@ -17,8 +23,8 @@ use crate::solver::{self, Satisfiability};
 use crate::{
     ChoiceId, ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
     EnumerationOptions, EnumerationResult, EnumerationStatistics, EvaluationInput,
-    IncompleteReason, InputConstraint, InvocationFrame, PathCondition, PathResult, PathWitness,
-    SymbolicParameter,
+    IncompleteReason, InputConstraint, InputLeaf, InvocationFrame, PathCondition, PathResult,
+    PathWitness, SymbolicParameter,
 };
 
 const SYNTACTIC_PATH_SAFETY_LIMIT: usize = 1_000_000;
@@ -29,13 +35,13 @@ pub(crate) fn enumerate_function_text(
     options: &EnumerationOptions,
 ) -> Result<EnumerationResult, XlsynthError> {
     let package_text = format!("package standalone\n\n{function_text}");
-    let mut package = parse_package(&package_text)?;
+    let package = parse_package(&package_text)?;
     let function_name = package
         .get_top_fn()
         .ok_or_else(|| symex_error("standalone IR has no function"))?
         .name
         .clone();
-    enumerate_parsed(&mut package, &function_name, inputs, options)
+    enumerate_parsed(&package, &function_name, inputs, options)
 }
 
 pub(crate) fn enumerate_package_text(
@@ -44,8 +50,8 @@ pub(crate) fn enumerate_package_text(
     inputs: Option<&[EvaluationInput]>,
     options: &EnumerationOptions,
 ) -> Result<EnumerationResult, XlsynthError> {
-    let mut package = parse_package(package_text)?;
-    enumerate_parsed(&mut package, function_name, inputs, options)
+    let package = parse_package(package_text)?;
+    enumerate_parsed(&package, function_name, inputs, options)
 }
 
 fn parse_package(text: &str) -> Result<Package, XlsynthError> {
@@ -57,8 +63,9 @@ fn parse_package(text: &str) -> Result<Package, XlsynthError> {
     Ok(package)
 }
 
+/// Constructs syntactic candidates, solver-prunes them, and reports coverage.
 fn enumerate_parsed(
-    package: &mut Package,
+    package: &Package,
     function_name: &str,
     inputs: Option<&[EvaluationInput]>,
     options: &EnumerationOptions,
@@ -85,11 +92,23 @@ fn enumerate_parsed(
         .enumerate()
         .map(|(index, parameter)| {
             let name = format!("symex_arg_{index}");
+            let input_leaf = InputLeaf::argument(index);
             match inputs.map(|inputs| &inputs[index]) {
-                Some(input) => {
-                    evaluation_input(&mut arena, &parameter.ty, input, &name, &mut parameters)
-                }
-                None => symbolic_input(&mut arena, &parameter.ty, &name, &mut parameters),
+                Some(input) => evaluation_input(
+                    &mut arena,
+                    &parameter.ty,
+                    input,
+                    &name,
+                    &input_leaf,
+                    &mut parameters,
+                ),
+                None => symbolic_input(
+                    &mut arena,
+                    &parameter.ty,
+                    &name,
+                    &input_leaf,
+                    &mut parameters,
+                ),
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -130,88 +149,48 @@ fn enumerate_parsed(
     let symbolic_outcomes = evaluator.symbolic_outcomes;
     let incomplete = evaluator.incomplete.take();
     drop(evaluator);
-    let mut completeness = incomplete
-        .map(EnumerationCompleteness::Incomplete)
-        .unwrap_or(EnumerationCompleteness::Complete);
-
-    let mut paths = Vec::new();
-    let mut seen_traces = HashSet::new();
-    let mut solver_queries = 0;
-    let mut infeasible_candidates = 0;
-    let mut solver_time = Duration::ZERO;
-    for candidate in candidates {
-        let condition = arena.to_smtlib(candidate.state.condition);
-        solver_queries += 1;
-        let solver_started = Instant::now();
-        let solved = solver::solve(&parameters, &condition, options.solver_timeout);
-        solver_time += solver_started.elapsed();
-        let model = match solved {
-            Ok(Satisfiability::Sat(model)) => model,
-            Ok(Satisfiability::Unsat) => {
-                infeasible_candidates += 1;
-                continue;
-            }
-            Ok(Satisfiability::Indeterminate(reason)) => {
-                completeness =
-                    EnumerationCompleteness::Incomplete(IncompleteReason::Solver(reason));
-                continue;
-            }
-            Err(error) => {
-                completeness = EnumerationCompleteness::Incomplete(IncompleteReason::Solver(
-                    error.to_string(),
-                ));
-                continue;
-            }
-        };
-        let trace_key = candidate
-            .state
-            .trace
-            .iter()
-            .map(|(id, outcome)| (id.clone(), outcome.clone()))
-            .collect::<Vec<_>>();
-        if !seen_traces.insert(trace_key) {
-            return Err(symex_error(
-                "enumeration produced a duplicate canonical selection trace",
-            ));
-        }
-        let witness = build_witness(function, inputs, &model)?;
-        paths.push(PathResult {
-            condition: PathCondition::from_smtlib(condition),
-            result: materialize_value(&arena, &candidate.value),
-            trace: candidate.state.trace,
-            witness,
-        });
-    }
-    paths.sort_by_key(|path| {
-        path.trace
-            .iter()
-            .map(|(id, outcome)| (id.clone(), outcome.clone()))
-            .collect::<Vec<_>>()
-    });
+    let completeness = incomplete.map_or(
+        EnumerationCompleteness::Complete,
+        EnumerationCompleteness::Incomplete,
+    );
+    let mut solved = solve_candidates(
+        SolvingContext {
+            arena: &arena,
+            function,
+            inputs,
+            parameters: &parameters,
+            timeout: options.solver_timeout,
+        },
+        candidates,
+        completeness,
+    )?;
+    solved.paths.sort_by(|lhs, rhs| lhs.trace.cmp(&rhs.trace));
     if let Some(limit) = options.max_paths
-        && paths.len() > limit
+        && solved.paths.len() > limit
     {
-        paths.truncate(limit);
-        completeness = EnumerationCompleteness::Incomplete(IncompleteReason::PathLimit { limit });
+        solved.paths.truncate(limit);
+        solved.completeness =
+            EnumerationCompleteness::Incomplete(IncompleteReason::PathLimit { limit });
     }
     Ok(EnumerationResult {
         parameters,
-        paths,
-        completeness,
+        paths: solved.paths,
+        completeness: solved.completeness,
         statistics: EnumerationStatistics {
             expression_nodes: arena.node_count(),
             evaluated_nodes,
             cache_hits,
             concrete_choices,
             symbolic_outcomes,
-            solver_queries,
-            infeasible_candidates,
+            solver_queries: solved.solver_queries,
+            infeasible_candidates: solved.infeasible_candidates,
             construction_time,
-            solver_time,
+            solver_time: solved.solver_time,
         },
     })
 }
 
+/// Lowers one public, backend-neutral assumption into the internal expression DAG.
 fn lower_constraint(
     arena: &mut ExprArena,
     parameters: &[SymbolicParameter],
@@ -270,14 +249,16 @@ fn lower_term(
     term: &ConstraintTerm,
 ) -> Result<ExprId, XlsynthError> {
     match term {
-        ConstraintTerm::Input(name) => {
+        ConstraintTerm::Input(input_leaf) => {
             let parameter = parameters
                 .iter()
-                .find(|parameter| parameter.name == *name)
+                .find(|parameter| parameter.input == *input_leaf)
                 .ok_or_else(|| {
-                    symex_error(format!("constraint names unknown input leaf {name:?}"))
+                    symex_error(format!(
+                        "constraint references non-symbolic input leaf {input_leaf:?}"
+                    ))
                 })?;
-            Ok(arena.variable(name, Sort::Bits(parameter.bit_count)))
+            Ok(arena.variable(&parameter.name, Sort::Bits(parameter.bit_count)))
         }
         ConstraintTerm::Constant(value) => {
             let bits = value
@@ -342,6 +323,81 @@ struct Evaluated {
     value: Value,
 }
 
+struct SolvingContext<'a> {
+    arena: &'a ExprArena,
+    function: &'a Fn,
+    inputs: Option<&'a [EvaluationInput]>,
+    parameters: &'a [SymbolicParameter],
+    timeout: Duration,
+}
+
+struct SolvedCandidates {
+    paths: Vec<PathResult>,
+    completeness: EnumerationCompleteness,
+    solver_queries: usize,
+    infeasible_candidates: usize,
+    solver_time: Duration,
+}
+
+/// Feasibility-prunes candidates and materializes one witness per unique trace.
+fn solve_candidates(
+    context: SolvingContext<'_>,
+    candidates: Vec<Evaluated>,
+    mut completeness: EnumerationCompleteness,
+) -> Result<SolvedCandidates, XlsynthError> {
+    let mut paths = Vec::new();
+    let mut seen_traces = BTreeSet::new();
+    let mut solver_queries = 0;
+    let mut infeasible_candidates = 0;
+    let mut solver_time = Duration::ZERO;
+
+    for candidate in candidates {
+        let condition = context.arena.to_smtlib(candidate.state.condition);
+        solver_queries += 1;
+        let solver_started = Instant::now();
+        let solved = solver::solve(context.parameters, &condition, context.timeout);
+        solver_time += solver_started.elapsed();
+        let model = match solved {
+            Ok(Satisfiability::Sat(model)) => model,
+            Ok(Satisfiability::Unsat) => {
+                infeasible_candidates += 1;
+                continue;
+            }
+            Ok(Satisfiability::Indeterminate(reason)) => {
+                completeness =
+                    EnumerationCompleteness::Incomplete(IncompleteReason::Solver(reason));
+                continue;
+            }
+            Err(error) => {
+                completeness = EnumerationCompleteness::Incomplete(IncompleteReason::Solver(
+                    error.to_string(),
+                ));
+                continue;
+            }
+        };
+        if !seen_traces.insert(candidate.state.trace.clone()) {
+            return Err(symex_error(
+                "enumeration produced a duplicate canonical selection trace",
+            ));
+        }
+        let witness = build_witness(context.function, context.inputs, context.parameters, &model)?;
+        paths.push(PathResult {
+            condition: PathCondition::from_smtlib(condition),
+            result: materialize_value(context.arena, &candidate.value),
+            trace: candidate.state.trace,
+            witness,
+        });
+    }
+
+    Ok(SolvedCandidates {
+        paths,
+        completeness,
+        solver_queries,
+        infeasible_candidates,
+        solver_time,
+    })
+}
+
 struct PathEvaluator<'a> {
     package: &'a Package,
     arena: &'a mut ExprArena,
@@ -354,6 +410,7 @@ struct PathEvaluator<'a> {
 }
 
 impl PathEvaluator<'_> {
+    /// Demand-evaluates a node while preserving each forked path state.
     fn eval_node(
         &mut self,
         frame: &Frame<'_>,
@@ -409,12 +466,14 @@ impl PathEvaluator<'_> {
                 invariant_args,
             } => self.eval_counted_for(
                 frame,
-                node_ref,
-                *init,
-                *trip_count,
-                *stride,
-                body,
-                invariant_args,
+                CountedForSpec {
+                    node_ref,
+                    init: *init,
+                    trip_count: *trip_count,
+                    stride: *stride,
+                    body_name: body,
+                    invariant_args,
+                },
                 state,
             )?,
             _ => {
@@ -457,6 +516,7 @@ impl PathEvaluator<'_> {
         Ok(partials)
     }
 
+    /// Resolves a `sel` to a concrete outcome or one guarded state per arm.
     fn eval_sel(
         &mut self,
         frame: &Frame<'_>,
@@ -480,7 +540,7 @@ impl PathEvaluator<'_> {
                     .map_or(ChoiceOutcome::Default, ChoiceOutcome::Case);
                 let case_ref = concrete_sel_case(&concrete, cases, default)?;
                 let state =
-                    self.record_choice(selected.state, self.choice_id(frame, node_ref), outcome)?;
+                    Self::record_choice(selected.state, Self::choice_id(frame, node_ref), outcome)?;
                 results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
@@ -489,7 +549,7 @@ impl PathEvaluator<'_> {
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    self.choice_id(frame, node_ref),
+                    Self::choice_id(frame, node_ref),
                     outcome,
                     guard,
                 ) else {
@@ -501,6 +561,7 @@ impl PathEvaluator<'_> {
         Ok(results)
     }
 
+    /// Enumerates only the first asserted priority bit, plus the default arm.
     fn eval_priority_sel(
         &mut self,
         frame: &Frame<'_>,
@@ -528,7 +589,7 @@ impl PathEvaluator<'_> {
                         (ChoiceOutcome::Case(index), case_ref)
                     });
                 let state =
-                    self.record_choice(selected.state, self.choice_id(frame, node_ref), outcome)?;
+                    Self::record_choice(selected.state, Self::choice_id(frame, node_ref), outcome)?;
                 results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
@@ -537,7 +598,7 @@ impl PathEvaluator<'_> {
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    self.choice_id(frame, node_ref),
+                    Self::choice_id(frame, node_ref),
                     outcome,
                     guard,
                 ) else {
@@ -549,6 +610,7 @@ impl PathEvaluator<'_> {
         Ok(results)
     }
 
+    /// Enumerates relevant selector masks and deep-ORs their demanded cases.
     fn eval_one_hot_sel(
         &mut self,
         frame: &Frame<'_>,
@@ -573,9 +635,9 @@ impl PathEvaluator<'_> {
                     .zip(&mask)
                     .filter_map(|(case_ref, selected)| selected.then_some(*case_ref))
                     .collect::<Vec<_>>();
-                let state = self.record_choice(
+                let state = Self::record_choice(
                     selected.state,
-                    self.choice_id(frame, node_ref),
+                    Self::choice_id(frame, node_ref),
                     ChoiceOutcome::OneHotMask(mask),
                 )?;
                 results.extend(self.eval_deep_or_cases(
@@ -587,13 +649,15 @@ impl PathEvaluator<'_> {
                 continue;
             }
             let relevant = selector.bit_count.min(cases.len());
-            let combination_count = 1_usize.checked_shl(relevant as u32);
+            let combination_count = u32::try_from(relevant)
+                .ok()
+                .and_then(|relevant| 1_usize.checked_shl(relevant));
             let available = SYNTACTIC_PATH_SAFETY_LIMIT.saturating_sub(self.syntactic_paths);
             let count = combination_count.unwrap_or(usize::MAX).min(available);
             self.symbolic_outcomes += count;
             if combination_count.is_none_or(|total| total > available) && self.incomplete.is_none()
             {
-                let choice = self.choice_id(frame, node_ref);
+                let choice = Self::choice_id(frame, node_ref);
                 self.incomplete = Some(IncompleteReason::ResourceLimit {
                     limit: SYNTACTIC_PATH_SAFETY_LIMIT,
                     choice,
@@ -606,7 +670,7 @@ impl PathEvaluator<'_> {
                 let guard = one_hot_mask_guard(self.arena, selector, &bits[..relevant])?;
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    self.choice_id(frame, node_ref),
+                    Self::choice_id(frame, node_ref),
                     ChoiceOutcome::OneHotMask(bits.clone()),
                     guard,
                 ) else {
@@ -652,6 +716,7 @@ impl PathEvaluator<'_> {
         Ok(partials)
     }
 
+    /// Evaluates a callee under a callsite-qualified dynamic choice context.
     fn eval_invoke(
         &mut self,
         frame: &Frame<'_>,
@@ -688,18 +753,21 @@ impl PathEvaluator<'_> {
         Ok(results)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Finite-unrolls a loop under iteration-qualified choice contexts.
     fn eval_counted_for(
         &mut self,
         frame: &Frame<'_>,
-        node_ref: NodeRef,
-        init: NodeRef,
-        trip_count: usize,
-        stride: usize,
-        body_name: &str,
-        invariant_args: &[NodeRef],
+        spec: CountedForSpec<'_>,
         state: State,
     ) -> Result<Vec<Evaluated>, XlsynthError> {
+        let CountedForSpec {
+            node_ref,
+            init,
+            trip_count,
+            stride,
+            body_name,
+            invariant_args,
+        } = spec;
         let body = self.package.get_fn(body_name).ok_or_else(|| {
             symex_error(format!(
                 "counted_for body {body_name:?} is absent from package"
@@ -768,6 +836,7 @@ impl PathEvaluator<'_> {
             .collect())
     }
 
+    /// Adds a symbolic branch guard while enforcing the syntactic safety limit.
     fn branch_state(
         &mut self,
         mut state: State,
@@ -796,7 +865,6 @@ impl PathEvaluator<'_> {
     }
 
     fn record_choice(
-        &self,
         mut state: State,
         choice: ChoiceId,
         outcome: ChoiceOutcome,
@@ -809,7 +877,7 @@ impl PathEvaluator<'_> {
         Ok(state)
     }
 
-    fn choice_id(&self, frame: &Frame<'_>, node_ref: NodeRef) -> ChoiceId {
+    fn choice_id(frame: &Frame<'_>, node_ref: NodeRef) -> ChoiceId {
         ChoiceId {
             function: frame.function.name.clone(),
             node_id: frame.function.get_node(node_ref).text_id,
@@ -822,6 +890,15 @@ struct LoopState {
     state: State,
     carry: Value,
     invariants: Vec<Value>,
+}
+
+struct CountedForSpec<'a> {
+    node_ref: NodeRef,
+    init: NodeRef,
+    trip_count: usize,
+    stride: usize,
+    body_name: &'a str,
+    invariant_args: &'a [NodeRef],
 }
 
 fn as_bits<'a>(value: &'a Value, description: &str) -> Result<&'a BitsValue, XlsynthError> {
@@ -959,9 +1036,11 @@ fn induction_value(
     Ok(Value::Bits(bits(width, Some(expression))?))
 }
 
+/// Reconstructs complete typed arguments and their symbolic leaf assignments.
 fn build_witness(
     function: &Fn,
     inputs: Option<&[EvaluationInput]>,
+    parameters: &[SymbolicParameter],
     model: &BTreeMap<String, IrBits>,
 ) -> Result<PathWitness, XlsynthError> {
     let values = function
@@ -977,10 +1056,18 @@ fn build_witness(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let symbolic_leaves = model
+    let symbolic_leaves = parameters
         .iter()
-        .map(|(name, bits)| (name.clone(), IrValue::from_bits(bits)))
-        .collect();
+        .map(|parameter| {
+            let bits = model.get(&parameter.name).ok_or_else(|| {
+                symex_error(format!(
+                    "solver model omitted symbolic parameter {:?}",
+                    parameter.name
+                ))
+            })?;
+            Ok((parameter.clone(), IrValue::from_bits(bits)))
+        })
+        .collect::<Result<_, XlsynthError>>()?;
     Ok(PathWitness {
         inputs: values,
         symbolic_leaves,

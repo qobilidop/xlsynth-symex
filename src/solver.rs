@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Z3 process adapter and the minimal model parser used by path enumeration.
+//!
+//! The adapter captures all process output. Solver-specific syntax remains
+//! behind this module; callers supply typed constraints through the public API.
+
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -15,6 +21,7 @@ pub(crate) enum Satisfiability {
     Indeterminate(String),
 }
 
+/// Checks one condition and returns a complete arbitrary-width input model.
 pub(crate) fn solve(
     parameters: &[SymbolicParameter],
     condition: &str,
@@ -23,15 +30,19 @@ pub(crate) fn solve(
     let timeout_ms = u64::try_from(timeout.as_millis())
         .unwrap_or(u64::MAX)
         .max(1);
-    let mut query =
-        format!("(set-option :produce-models true)\n(set-option :timeout {timeout_ms})\n");
+    let mut query = String::from("(set-option :produce-models true)\n");
+    writeln!(query, "(set-option :timeout {timeout_ms})").expect("writing to a String cannot fail");
     for parameter in parameters {
-        query.push_str(&format!(
-            "(declare-const {} (_ BitVec {}))\n",
+        writeln!(
+            query,
+            "(declare-const {} (_ BitVec {}))",
             parameter.name, parameter.bit_count
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
-    query.push_str(&format!("(assert {condition})\n(check-sat)\n"));
+    writeln!(query, "(assert {condition})").expect("writing to a String cannot fail");
+    query.push_str("(check-sat)\n");
+    query.push_str("(get-info :reason-unknown)\n");
     if !parameters.is_empty() {
         query.push_str("(get-value (");
         query.push_str(
@@ -46,6 +57,7 @@ pub(crate) fn solve(
 
     let mut child = Command::new("z3")
         .arg("-in")
+        .arg(format!("-t:{timeout_ms}"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -72,13 +84,17 @@ pub(crate) fn solve(
             "z3 returned no status: {stdout:?}"
         )));
     };
+    // Z3 4.8 exits nonzero when the unconditional get-value follows unsat or
+    // unknown. Those statuses are already authoritative; sat additionally
+    // requires a clean exit and a complete model below.
     match status {
         "unsat" => Ok(Satisfiability::Unsat),
-        "unknown" => Ok(Satisfiability::Indeterminate(
-            "z3 returned unknown".to_owned(),
-        )),
+        "unknown" => Ok(Satisfiability::Indeterminate(format!(
+            "z3 returned unknown: {}",
+            reason_unknown(expressions.get(1)).unwrap_or("reason unavailable")
+        ))),
         "sat" if !output.status.success() => Ok(Satisfiability::Indeterminate(format!(
-            "z3 exited with {} after reporting sat: {}",
+            "z3 exited with {} after reporting sat: stdout={stdout:?}, stderr={:?}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ))),
@@ -86,7 +102,7 @@ pub(crate) fn solve(
             if parameters.is_empty() {
                 return Ok(Satisfiability::Sat(BTreeMap::new()));
             }
-            let Some(Sexp::List(bindings)) = expressions.get(1) else {
+            let Some(Sexp::List(bindings)) = expressions.get(2) else {
                 return Ok(Satisfiability::Indeterminate(format!(
                     "z3 omitted model values: {stdout:?}"
                 )));
@@ -122,6 +138,19 @@ pub(crate) fn solve(
     }
 }
 
+fn reason_unknown(expression: Option<&Sexp>) -> Option<&str> {
+    let Sexp::List(parts) = expression? else {
+        return None;
+    };
+    if parts.first()?.as_atom()? != ":reason-unknown" {
+        return None;
+    }
+    parts
+        .get(1)?
+        .as_atom()
+        .map(|reason| reason.trim_matches('"'))
+}
+
 fn model_error<T>(stdout: &str, message: &str) -> Result<T, XlsynthError> {
     Err(XlsynthError(format!(
         "xlsynth-symex: {message} in z3 output {stdout:?}"
@@ -143,6 +172,7 @@ impl Sexp {
     }
 }
 
+/// Parses the restricted S-expression subset emitted by generated Z3 queries.
 fn parse_sexpressions(text: &str) -> Result<Vec<Sexp>, XlsynthError> {
     let tokens = tokenize(text);
     let mut index = 0;
@@ -263,10 +293,12 @@ mod tests {
     fn parses_z3_models_at_non_nibble_and_wide_widths() {
         let parameters = vec![
             SymbolicParameter {
+                input: crate::InputLeaf::argument(0),
                 name: "x".to_owned(),
                 bit_count: 5,
             },
             SymbolicParameter {
+                input: crate::InputLeaf::argument(1),
                 name: "wide".to_owned(),
                 bit_count: 80,
             },
@@ -290,6 +322,7 @@ mod tests {
     #[test]
     fn reports_unsatisfiable_constraints() {
         let parameters = vec![SymbolicParameter {
+            input: crate::InputLeaf::argument(0),
             name: "x".to_owned(),
             bit_count: 1,
         }];
@@ -302,5 +335,12 @@ mod tests {
             .unwrap(),
             Satisfiability::Unsat
         ));
+    }
+
+    #[test]
+    fn extracts_the_solver_unknown_reason() {
+        let expressions = parse_sexpressions("unknown\n(:reason-unknown \"timeout\")\n").unwrap();
+
+        assert_eq!(reason_unknown(expressions.get(1)), Some("timeout"));
     }
 }
