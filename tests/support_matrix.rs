@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 const MATRIX: &str = include_str!("../docs/user/support-matrix.md");
 const OPERATION_TESTS: &str = include_str!("operation_semantics.rs");
-const PATH_TESTS: &str = include_str!("path_enumeration.rs");
+const SELECTION_TESTS: &str = include_str!("selection_enumeration.rs");
 const XLSYNTH_CRATE_REVISION: &str = "92bc9b932981c776bb4bb197cd6b6726f17ec090";
 
 fn markdown_cells(line: &str) -> Vec<&str> {
@@ -68,7 +68,7 @@ fn support_matrix_is_complete_and_well_formed() {
             let coverage = code_cell(fields[2], line);
             let declaration = format!("fn {coverage}(");
             assert!(
-                OPERATION_TESTS.contains(&declaration) || PATH_TESTS.contains(&declaration),
+                OPERATION_TESTS.contains(&declaration) || SELECTION_TESTS.contains(&declaration),
                 "{operation} names unknown executable coverage target {coverage}"
             );
             (operation, Some(coverage))

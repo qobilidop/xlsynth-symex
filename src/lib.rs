@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Symbolic evaluation and exhaustive path generation for pure XLS functions.
+//! Symbolic evaluation and exhaustive selection enumeration for pure XLS functions.
 //!
-//! Canonical enumeration returns every feasible selection trace, its condition
-//! and residual value, and a concrete witness, with explicit complete or
+//! Canonical enumeration returns every feasible selection trace, its guard and
+//! residual value, and a concrete witness, with explicit complete or
 //! incomplete status. XLS remains the concrete execution and independent SMT
 //! reference boundary used by the validation suite.
 
@@ -30,12 +30,12 @@ pub enum EvaluationInput {
     Array(Vec<EvaluationInput>),
 }
 
-/// A symbolic path condition.
+/// Boolean predicate under which a symbolic result applies.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PathCondition(String);
+pub struct Guard(String);
 
-impl PathCondition {
-    /// Returns this condition as an SMT-LIB Boolean expression.
+impl Guard {
+    /// Returns this guard as an SMT-LIB Boolean expression.
     #[must_use]
     pub fn as_smtlib(&self) -> &str {
         &self.0
@@ -50,13 +50,13 @@ impl PathCondition {
     }
 }
 
-impl Default for PathCondition {
+impl Default for Guard {
     fn default() -> Self {
         Self::unconditional()
     }
 }
 
-/// The dynamic context that distinguishes repeated evaluations of a choice.
+/// The dynamic context that distinguishes repeated evaluations of a selection.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum InvocationFrame {
     /// A function invocation at a caller node.
@@ -77,10 +77,10 @@ pub enum InvocationFrame {
     },
 }
 
-/// Stable identity of one choice within a particular evaluation.
+/// Stable identity of one selection site within a particular evaluation.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ChoiceId {
-    /// Function containing the choice node.
+pub struct SelectionId {
+    /// Function containing the selection node.
     pub function: String,
     /// Textual XLS node id.
     pub node_id: usize,
@@ -134,9 +134,9 @@ impl InputLeaf {
     }
 }
 
-/// Canonical outcome at an active choice node.
+/// Canonical outcome at an active selection site.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ChoiceOutcome {
+pub enum SelectionOutcome {
     /// A zero-based selected case.
     Case(usize),
     /// The explicit default arm.
@@ -145,53 +145,56 @@ pub enum ChoiceOutcome {
     OneHotMask(Vec<bool>),
 }
 
-/// Concrete inputs produced by the solver for one feasible path.
+/// Sparse map from active selection sites to their canonical outcomes.
+pub type SelectionTrace = BTreeMap<SelectionId, SelectionOutcome>;
+
+/// Concrete inputs produced by the solver for one feasible guarded result.
 #[derive(Clone, Debug)]
-pub struct PathWitness {
+pub struct Witness {
     /// Complete typed function arguments in signature order.
     pub inputs: Vec<IrValue>,
     /// Model values keyed by complete symbolic-parameter metadata.
     pub symbolic_leaves: BTreeMap<SymbolicParameter, IrValue>,
 }
 
-/// One feasible canonical symbolic path.
+/// One feasible symbolic result identified by a canonical selection trace.
 #[derive(Clone, Debug)]
-pub struct PathResult {
-    /// Constraint under which this path is active.
-    pub condition: PathCondition,
-    /// Residual result for this path.
+pub struct GuardedResult {
+    /// Predicate under which this result is active.
+    pub guard: Guard,
+    /// Residual result after the trace's selections are fixed.
     pub result: SymbolicValue,
-    /// Sparse canonical map of active choices to their outcomes.
-    pub trace: BTreeMap<ChoiceId, ChoiceOutcome>,
-    /// Solver-derived concrete input assignment reaching this path.
-    pub witness: PathWitness,
+    /// Sparse canonical map of active selections to their outcomes.
+    pub trace: SelectionTrace,
+    /// Solver-derived concrete input assignment satisfying this guard.
+    pub witness: Witness,
 }
 
 /// Why an enumeration returned only a partial result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IncompleteReason {
-    /// The caller's configured path limit was reached.
-    PathLimit {
-        /// Maximum number of feasible paths requested by the caller.
+    /// The caller's configured result limit was reached.
+    ResultLimit {
+        /// Maximum number of feasible guarded results requested by the caller.
         limit: usize,
     },
     /// An internal safety ceiling prevented impractical materialization.
     ResourceLimit {
         /// Maximum number of syntactic branches considered.
         limit: usize,
-        /// Choice that exceeded the ceiling.
-        choice: ChoiceId,
+        /// Selection that exceeded the ceiling.
+        selection: SelectionId,
     },
     /// A solver invocation failed or returned an indeterminate answer.
     Solver(String),
 }
 
-/// Whether all feasible canonical paths were returned.
+/// Whether the complete selection partition was returned.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnumerationCompleteness {
-    /// Every feasible path under the v1 policy is present.
+    /// Every feasible canonical selection trace under the v1 policy is present.
     Complete,
-    /// Returned paths are useful but do not constitute full coverage.
+    /// Returned guarded results are useful but do not constitute full coverage.
     Incomplete(IncompleteReason),
 }
 
@@ -255,15 +258,15 @@ pub enum InputConstraint {
     },
 }
 
-/// Configuration for canonical path enumeration.
+/// Configuration for canonical selection enumeration.
 #[derive(Clone, Debug)]
 pub struct EnumerationOptions {
-    /// Optional maximum number of feasible paths to return.
+    /// Optional maximum number of feasible guarded results to return.
     ///
     /// `None` performs uncapped exhaustive enumeration. Reaching a configured
     /// limit always reports [`EnumerationCompleteness::Incomplete`].
-    pub max_paths: Option<usize>,
-    /// Caller assumptions conjoined with every path condition.
+    pub max_results: Option<usize>,
+    /// Caller assumptions conjoined with every result guard.
     ///
     /// Constraints use structural [`InputLeaf`] identifiers. A completed result
     /// covers exactly the domain satisfying these assumptions.
@@ -278,38 +281,38 @@ pub struct EnumerationOptions {
 impl Default for EnumerationOptions {
     fn default() -> Self {
         Self {
-            max_paths: None,
+            max_results: None,
             constraints: Vec::new(),
             solver_timeout: Duration::from_secs(10),
         }
     }
 }
 
-/// Result of canonical path enumeration.
+/// Result of canonical selection enumeration.
 #[derive(Clone, Debug)]
 pub struct EnumerationResult {
-    /// Symbolic bits leaves shared by all path expressions.
+    /// Symbolic bits leaves shared by all result expressions.
     pub parameters: Vec<SymbolicParameter>,
-    /// Feasible canonical paths in deterministic trace order.
-    pub paths: Vec<PathResult>,
+    /// Feasible guarded results in deterministic trace order.
+    pub results: Vec<GuardedResult>,
     /// Explicit full-coverage status.
     pub completeness: EnumerationCompleteness,
     /// Measurements from constructing and solving this enumeration.
     pub statistics: EnumerationStatistics,
 }
 
-/// Measurements for one canonical path-enumeration request.
+/// Measurements for one canonical selection-enumeration request.
 #[derive(Clone, Debug, Default)]
 pub struct EnumerationStatistics {
     /// Unique nodes in the interned symbolic-expression DAG.
     pub expression_nodes: usize,
-    /// Function nodes evaluated on cache misses across all path states.
+    /// Function nodes evaluated on cache misses across all candidate states.
     pub evaluated_nodes: usize,
-    /// Function-node values reused from a path-local memoization cache.
+    /// Function-node values reused from a candidate-local memoization cache.
     pub cache_hits: usize,
-    /// Demanded choice sites resolved without symbolic forking.
-    pub concrete_choices: usize,
-    /// Symbolic choice outcomes constructed before feasibility pruning.
+    /// Demanded selection sites resolved without symbolic forking.
+    pub concrete_selections: usize,
+    /// Symbolic selection outcomes constructed before feasibility pruning.
     pub symbolic_outcomes: usize,
     /// Feasibility and model queries issued to the solver.
     pub solver_queries: usize,
@@ -378,8 +381,8 @@ impl SymbolicValue {
 /// The merged symbolic result of evaluating one XLS function.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SymexResult {
-    /// Constraint under which the result applies.
-    pub path_condition: PathCondition,
+    /// Predicate under which the result applies.
+    pub guard: Guard,
     /// Symbolic parameters in function-signature order.
     pub parameters: Vec<SymbolicParameter>,
     /// Native symbolic result expression.
@@ -476,11 +479,11 @@ pub fn evaluate_package_with_inputs(
     evaluator::evaluate_package_text_with_inputs(&package.to_string(), function_name, inputs)
 }
 
-/// Enumerates every feasible canonical path through a leaf pure XLS function.
+/// Enumerates every feasible canonical selection trace in a leaf pure XLS function.
 ///
 /// # Errors
 ///
-/// Returns an error if IR conversion, path construction, or witness
+/// Returns an error if IR conversion, candidate construction, or witness
 /// reconstruction fails. Solver indeterminacy is reported as incompleteness.
 pub fn enumerate(function: &IrFunction) -> Result<EnumerationResult, XlsynthError> {
     enumerator::enumerate_function_text(
@@ -490,7 +493,7 @@ pub fn enumerate(function: &IrFunction) -> Result<EnumerationResult, XlsynthErro
     )
 }
 
-/// Enumerates canonical paths through an all-symbolic leaf function with options.
+/// Enumerates canonical selections in an all-symbolic leaf function with options.
 ///
 /// # Errors
 ///
@@ -503,7 +506,7 @@ pub fn enumerate_with_options(
     enumerator::enumerate_function_text(&function.to_ir_string()?, None, options)
 }
 
-/// Enumerates canonical paths through a leaf function with mixed inputs.
+/// Enumerates canonical selections in a leaf function with mixed inputs.
 ///
 /// # Errors
 ///
@@ -520,7 +523,7 @@ pub fn enumerate_with_inputs(
     )
 }
 
-/// Enumerates canonical paths through a leaf function with explicit options.
+/// Enumerates canonical selections in a leaf function with explicit options.
 ///
 /// # Errors
 ///
@@ -534,12 +537,12 @@ pub fn enumerate_with_inputs_and_options(
     enumerator::enumerate_function_text(&function.to_ir_string()?, Some(inputs), options)
 }
 
-/// Enumerates canonical paths through a named function and its owning package.
+/// Enumerates canonical selections in a named function and its owning package.
 ///
 /// # Errors
 ///
 /// Returns an error if the function is absent, package conversion fails, or
-/// path construction or witness reconstruction fails.
+/// candidate construction or witness reconstruction fails.
 pub fn enumerate_package(
     package: &IrPackage,
     function_name: &str,
@@ -571,7 +574,7 @@ pub fn enumerate_package_with_options(
 /// # Errors
 ///
 /// Returns an error if parsing, validation, extension desugaring, function
-/// lookup, path construction, or witness reconstruction fails.
+/// lookup, candidate construction, or witness reconstruction fails.
 pub fn enumerate_ir_package(
     package_ir: &str,
     function_name: &str,
@@ -584,7 +587,7 @@ pub fn enumerate_ir_package(
     )
 }
 
-/// Enumerates all-symbolic paths in textual XLS/PIR package IR with options.
+/// Enumerates all-symbolic selections in textual XLS/PIR package IR with options.
 ///
 /// # Errors
 ///
@@ -598,7 +601,7 @@ pub fn enumerate_ir_package_with_options(
     enumerator::enumerate_package_text(package_ir, function_name, None, options)
 }
 
-/// Enumerates package-function paths with mixed inputs and default options.
+/// Enumerates package-function selections with mixed inputs and default options.
 ///
 /// # Errors
 ///
@@ -617,7 +620,7 @@ pub fn enumerate_package_with_inputs(
     )
 }
 
-/// Enumerates package-function paths with mixed inputs and explicit options.
+/// Enumerates package-function selections with mixed inputs and explicit options.
 ///
 /// # Errors
 ///
@@ -632,7 +635,7 @@ pub fn enumerate_package_with_inputs_and_options(
     enumerator::enumerate_package_text(&package.to_string(), function_name, Some(inputs), options)
 }
 
-/// Enumerates textual package-function paths with mixed inputs and options.
+/// Enumerates textual package-function selections with mixed inputs and options.
 ///
 /// # Errors
 ///
@@ -667,7 +670,7 @@ top fn add(x: bits[8], y: bits[8]) -> bits[8] {
 
         let result = evaluate(&function).unwrap();
 
-        assert_eq!(result.path_condition.as_smtlib(), "true");
+        assert_eq!(result.guard.as_smtlib(), "true");
         assert_eq!(
             result.parameters,
             vec![

@@ -12,7 +12,7 @@ use xlsynth::{
     optimize_ir,
 };
 use xlsynth_symex::{
-    EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput, PathResult,
+    EnumerationCompleteness, EnumerationOptions, EnumerationResult, EvaluationInput, GuardedResult,
     SymexResult, enumerate_package, enumerate_package_with_inputs_and_options, evaluate_package,
     evaluate_package_with_inputs,
 };
@@ -199,7 +199,7 @@ struct ValidationEntry<'a> {
     curated_vector_differential: &'a str,
     differential_fuzz: &'a str,
     symbolic_equivalence: &'a str,
-    path_witness_replay: &'a str,
+    selection_witness_replay: &'a str,
 }
 
 impl<'a> ValidationEntry<'a> {
@@ -216,7 +216,7 @@ impl<'a> ValidationEntry<'a> {
             curated_vector_differential: fields[2],
             differential_fuzz: fields[3],
             symbolic_equivalence: fields[4],
-            path_witness_replay: fields[5],
+            selection_witness_replay: fields[5],
         }
     }
 }
@@ -334,20 +334,20 @@ fn smt_ir_value_bits(value: &IrValue) -> String {
     result
 }
 
-fn assert_path_witness_replays(
+fn assert_witness_replays(
     entry: &ManifestEntry,
     ir_form: IrForm,
     package: &IrPackage,
     function_name: &str,
     function: &IrFunction,
-    path_index: usize,
-    path: &PathResult,
+    result_index: usize,
+    guarded: &GuardedResult,
 ) {
     let expected = function
-        .interpret(&path.witness.inputs)
+        .interpret(&guarded.witness.inputs)
         .unwrap_or_else(|error| {
             panic!(
-                "{} ({} path {path_index}): XLS witness replay failed: {error}",
+                "{} ({} result {result_index}): XLS witness replay failed: {error}",
                 entry.id,
                 ir_form.name()
             )
@@ -355,9 +355,9 @@ fn assert_path_witness_replays(
     let mut expected_leaves = Vec::new();
     flatten_ir_bits(&expected, &mut expected_leaves);
     let mut result_leaves = Vec::new();
-    path.result.flatten_bits(&mut result_leaves);
+    guarded.result.flatten_bits(&mut result_leaves);
     assert_eq!(result_leaves.len(), expected_leaves.len());
-    let bindings = path
+    let bindings = guarded
         .witness
         .symbolic_leaves
         .iter()
@@ -379,10 +379,10 @@ fn assert_path_witness_replays(
             format!("(= {} (_ bv{expected} {width}))", bind(&actual.expression))
         })
         .collect::<Vec<_>>();
-    claims.push(bind(path.condition.as_smtlib()));
+    claims.push(bind(guarded.guard.as_smtlib()));
     let query = format!("(assert (not (and {})))\n(check-sat)\n", claims.join(" "));
     let context = format!(
-        "{} ({} path {path_index}) witness",
+        "{} ({} result {result_index}) witness",
         entry.id,
         ir_form.name()
     );
@@ -390,19 +390,19 @@ fn assert_path_witness_replays(
     assert_eq!(
         stdout,
         "unsat",
-        "{} ({} path {path_index}) witness does not satisfy its condition/result\n{query}",
+        "{} ({} result {result_index}) witness does not satisfy its guard/result\n{query}",
         entry.id,
         ir_form.name()
     );
 
-    let concrete_inputs = path
+    let concrete_inputs = guarded
         .witness
         .inputs
         .iter()
         .cloned()
         .map(EvaluationInput::Concrete)
         .collect::<Vec<_>>();
-    let concrete_trace = enumerate_package_with_inputs_and_options(
+    let concrete_enumeration = enumerate_package_with_inputs_and_options(
         package,
         function_name,
         &concrete_inputs,
@@ -410,29 +410,29 @@ fn assert_path_witness_replays(
     )
     .unwrap_or_else(|error| {
         panic!(
-            "{} ({} path {path_index}): concrete trace replay failed: {error}",
+            "{} ({} result {result_index}): concrete trace replay failed: {error}",
             entry.id,
             ir_form.name()
         )
     });
     assert_eq!(
-        concrete_trace.completeness,
+        concrete_enumeration.completeness,
         EnumerationCompleteness::Complete,
-        "{} ({} path {path_index}): concrete trace replay incomplete",
+        "{} ({} result {result_index}): concrete trace replay incomplete",
         entry.id,
         ir_form.name()
     );
     assert_eq!(
-        concrete_trace.paths.len(),
+        concrete_enumeration.results.len(),
         1,
-        "{} ({} path {path_index}): concrete inputs must determine one path",
+        "{} ({} result {result_index}): concrete inputs must determine one guarded result",
         entry.id,
         ir_form.name()
     );
     assert_eq!(
-        concrete_trace.paths[0].trace,
-        path.trace,
-        "{} ({} path {path_index}): concrete and symbolic traces differ",
+        concrete_enumeration.results[0].trace,
+        guarded.trace,
+        "{} ({} result {result_index}): concrete and symbolic traces differ",
         entry.id,
         ir_form.name()
     );
@@ -460,13 +460,13 @@ fn assert_complete_partition(
         ir_form.name()
     );
     let unique_traces = enumerated
-        .paths
+        .results
         .iter()
-        .map(|path| path.trace.clone())
+        .map(|guarded| guarded.trace.clone())
         .collect::<BTreeSet<_>>();
     assert_eq!(
         unique_traces.len(),
-        enumerated.paths.len(),
+        enumerated.results.len(),
         "{} ({} {partition}): duplicate canonical traces",
         entry.id,
         ir_form.name()
@@ -482,46 +482,60 @@ fn assert_complete_partition(
             )
         })
         .collect::<String>();
-    let coverage = match enumerated.paths.as_slice() {
+    let guards = enumerated
+        .results
+        .iter()
+        .map(|guarded| guarded.guard.as_smtlib())
+        .collect::<Vec<_>>();
+    let coverage = match guards.as_slice() {
         [] => "false".to_owned(),
-        [only] => only.condition.as_smtlib().to_owned(),
-        _ => format!(
-            "(or {})",
-            enumerated
-                .paths
+        [only] => (*only).to_owned(),
+        _ => format!("(or {})", guards.join(" ")),
+    };
+    let overlaps = guards
+        .iter()
+        .enumerate()
+        .flat_map(|(lhs_index, lhs)| {
+            guards
                 .iter()
-                .map(|path| path.condition.as_smtlib())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
+                .skip(lhs_index + 1)
+                .map(move |rhs| format!("(and {lhs} {rhs})"))
+        })
+        .collect::<Vec<_>>();
+    let overlap = match overlaps.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.clone(),
+        _ => format!("(or {})", overlaps.join(" ")),
     };
     let mut merged_leaves = Vec::new();
     merged.result.flatten_bits(&mut merged_leaves);
     let implications = enumerated
-        .paths
+        .results
         .iter()
-        .map(|path| {
-            let mut path_leaves = Vec::new();
-            path.result.flatten_bits(&mut path_leaves);
+        .map(|guarded| {
+            let mut result_leaves = Vec::new();
+            guarded.result.flatten_bits(&mut result_leaves);
             assert_eq!(
-                path_leaves.len(),
+                result_leaves.len(),
                 merged_leaves.len(),
                 "{} ({} {partition}): result shapes differ",
                 entry.id,
                 ir_form.name()
             );
-            let equalities = path_leaves
+            let equalities = result_leaves
                 .iter()
                 .zip(&merged_leaves)
-                .filter(|(path, _)| path.bit_count > 0)
-                .map(|(path, merged)| format!("(= {} {})", path.expression, merged.expression))
+                .filter(|(result_leaf, _)| result_leaf.bit_count > 0)
+                .map(|(result_leaf, merged)| {
+                    format!("(= {} {})", result_leaf.expression, merged.expression)
+                })
                 .collect::<Vec<_>>();
             let equality = match equalities.as_slice() {
                 [] => "true".to_owned(),
                 [only] => only.clone(),
                 _ => format!("(and {})", equalities.join(" ")),
             };
-            format!("(=> {} {equality})", path.condition.as_smtlib())
+            format!("(=> {} {equality})", guarded.guard.as_smtlib())
         })
         .collect::<Vec<_>>();
     let equivalence = match implications.as_slice() {
@@ -529,14 +543,15 @@ fn assert_complete_partition(
         [only] => only.clone(),
         _ => format!("(and {})", implications.join(" ")),
     };
-    let query =
-        format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
+    let query = format!(
+        "{declarations}(assert (or (not {coverage}) {overlap} (not {equivalence})))\n(check-sat)\n"
+    );
     let context = format!("{} ({} {partition}) partition", entry.id, ir_form.name());
     let stdout = run_z3(&query, &context);
     assert_eq!(
         stdout,
         "unsat",
-        "{} ({} {partition}): incomplete domain or piecewise mismatch\n{query}",
+        "{} ({} {partition}): incomplete or overlapping domain, or piecewise mismatch\n{query}",
         entry.id,
         ir_form.name()
     );
@@ -867,7 +882,7 @@ fn symbolic_equivalence_checking() {
 }
 
 #[test]
-fn path_witness_replay() {
+fn selection_witness_replay() {
     let mut matrix_mismatches = Vec::new();
     for entry in manifest_entries() {
         let (unoptimized, optimized, function_name) = compile_entry(&entry);
@@ -879,13 +894,13 @@ fn path_witness_replay() {
                 .into_iter()
                 .find(|validation| validation.id == entry.id && validation.ir_form == ir_form)
                 .unwrap();
-            let expected_paths = validation
-                .path_witness_replay
+            let expected_results = validation
+                .selection_witness_replay
                 .strip_prefix("pass:")
                 .and_then(|count| count.parse::<usize>().ok());
             let enumerated = enumerate_package(package, &function_name).unwrap_or_else(|error| {
                 panic!(
-                    "{} ({}): path enumeration failed: {error}",
+                    "{} ({}): selection enumeration failed: {error}",
                     entry.id,
                     ir_form.name()
                 )
@@ -898,32 +913,32 @@ fn path_witness_replay() {
                 )
             });
             assert_complete_partition(&entry, ir_form, "all-symbolic", &merged, &enumerated);
-            if expected_paths != Some(enumerated.paths.len()) {
+            if expected_results != Some(enumerated.results.len()) {
                 matrix_mismatches.push(format!(
                     "{}\t{}\tpass:{} (recorded {})",
                     entry.id,
                     ir_form.name(),
-                    enumerated.paths.len(),
-                    validation.path_witness_replay
+                    enumerated.results.len(),
+                    validation.selection_witness_replay
                 ));
             }
             let function = package.get_function(&function_name).unwrap();
-            for (path_index, path) in enumerated.paths.iter().enumerate() {
-                assert_path_witness_replays(
+            for (result_index, guarded) in enumerated.results.iter().enumerate() {
+                assert_witness_replays(
                     &entry,
                     ir_form,
                     package,
                     &function_name,
                     &function,
-                    path_index,
-                    path,
+                    result_index,
+                    guarded,
                 );
             }
         }
     }
     assert!(
         matrix_mismatches.is_empty(),
-        "path-witness validation matrix is stale:\n{}",
+        "selection-witness validation matrix is stale:\n{}",
         matrix_mismatches.join("\n")
     );
 }
@@ -973,15 +988,15 @@ fn mixed_argument_partition_witness_replay() {
                     });
                 let partition = format!("concrete:{concrete_index}");
                 assert_complete_partition(&entry, ir_form, &partition, &merged, &enumerated);
-                for (path_index, path) in enumerated.paths.iter().enumerate() {
-                    assert_path_witness_replays(
+                for (result_index, guarded) in enumerated.results.iter().enumerate() {
+                    assert_witness_replays(
                         &entry,
                         ir_form,
                         package,
                         &function_name,
                         &function,
-                        path_index,
-                        path,
+                        result_index,
+                        guarded,
                     );
                 }
             }

@@ -2,7 +2,7 @@
 
 //! Merged symbolic evaluation for finite, pure XLS function values.
 //!
-//! Selection operations produce symbolic `ite` expressions here. The path
+//! Selection operations produce symbolic `ite` expressions here. The selection
 //! enumerator reuses the same pure-node semantics while resolving demanded
 //! selections into explicit canonical outcomes.
 
@@ -16,8 +16,7 @@ use xlsynth_pir::ir_parser::Parser;
 
 use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
 use crate::{
-    EvaluationInput, InputLeaf, PathCondition, SymbolicBits, SymbolicParameter, SymbolicValue,
-    SymexResult,
+    EvaluationInput, Guard, InputLeaf, SymbolicBits, SymbolicParameter, SymbolicValue, SymexResult,
 };
 
 #[derive(Clone, Debug)]
@@ -190,7 +189,7 @@ fn evaluate_parsed(
         }
     }
     Ok(SymexResult {
-        path_condition: PathCondition::default(),
+        guard: Guard::default(),
         parameters,
         result,
         result_smtlib,

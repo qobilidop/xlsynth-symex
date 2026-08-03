@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn simplifies_boolean_path_conditions() {
+    fn simplifies_boolean_guards() {
         let mut arena = ExprArena::default();
         let condition = arena.variable("condition", Sort::Bool);
         let true_id = arena.bool_const(true);

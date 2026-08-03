@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Minimal complete-path enumeration example.
+//! Minimal complete selection-enumeration example.
 
 use xlsynth::IrPackage;
 use xlsynth_symex::{EnumerationCompleteness, enumerate_package};
@@ -16,8 +16,8 @@ top fn choose(selector: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, fallback
     let result = enumerate_package(&package, "choose").expect("enumeration must run");
 
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    println!("{} feasible paths", result.paths.len());
-    for path in result.paths {
-        println!("{:?}: {}", path.trace, path.condition.as_smtlib());
+    println!("{} feasible guarded results", result.results.len());
+    for guarded in result.results {
+        println!("{:?}: {}", guarded.trace, guarded.guard.as_smtlib());
     }
 }

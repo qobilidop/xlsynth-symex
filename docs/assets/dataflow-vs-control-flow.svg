@@ -102,5 +102,5 @@
   <text class="small" x="890" y="576" text-anchor="middle">No control transfers between add, sub, and sel.</text>
 
   <rect x="175" y="628" width="850" height="42" rx="21" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
-  <text class="label" x="600" y="654" text-anchor="middle">Here, a symbolic “path” is a feasible sel outcome—not an executed-basic-block trace.</text>
+  <text class="label" x="600" y="654" text-anchor="middle">Enumeration records selection outcomes—not executed-basic-block or dataflow paths.</text>
 </svg>

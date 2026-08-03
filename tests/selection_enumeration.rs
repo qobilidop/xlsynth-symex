@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! End-to-end checks for canonical path enumeration and witness replay.
+//! End-to-end checks for canonical selection enumeration and witness replay.
 
 mod common;
 
@@ -8,9 +8,9 @@ use std::collections::BTreeSet;
 
 use xlsynth::{IrBits, IrPackage, IrValue};
 use xlsynth_symex::{
-    ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
-    EnumerationOptions, EnumerationResult, EvaluationInput, IncompleteReason, InputConstraint,
-    InputLeaf, PathResult, SymbolicValue, enumerate_package,
+    ConstraintComparison, ConstraintTerm, EnumerationCompleteness, EnumerationOptions,
+    EnumerationResult, EvaluationInput, GuardedResult, IncompleteReason, InputConstraint,
+    InputLeaf, SelectionOutcome, SymbolicValue, enumerate_package,
     enumerate_package_with_inputs_and_options, enumerate_package_with_options,
     enumerate_with_inputs, evaluate_package,
 };
@@ -45,15 +45,15 @@ fn smt_bits(bits: &IrBits) -> String {
     result
 }
 
-fn assert_witness_replays(function: &xlsynth::IrFunction, path: &PathResult) {
-    let expected = function.interpret(&path.witness.inputs).unwrap();
+fn assert_witness_replays(function: &xlsynth::IrFunction, guarded: &GuardedResult) {
+    let expected = function.interpret(&guarded.witness.inputs).unwrap();
     let mut expected_leaves = Vec::new();
     flatten_ir_bits(&expected, &mut expected_leaves);
     let mut symbolic_leaves = Vec::new();
-    path.result.flatten_bits(&mut symbolic_leaves);
+    guarded.result.flatten_bits(&mut symbolic_leaves);
     assert_eq!(symbolic_leaves.len(), expected_leaves.len());
 
-    let bindings = path
+    let bindings = guarded
         .witness
         .symbolic_leaves
         .iter()
@@ -81,22 +81,22 @@ fn assert_witness_replays(function: &xlsynth::IrFunction, path: &PathResult) {
             format!("(= {} {})", bind(&symbolic.expression), smt_bits(expected))
         })
         .collect::<Vec<_>>();
-    equalities.push(bind(path.condition.as_smtlib()));
+    equalities.push(bind(guarded.guard.as_smtlib()));
     let query = format!(
         "(assert (not (and {})))\n(check-sat)\n",
         equalities.join(" ")
     );
-    let stdout = run_z3(&query, "path-witness replay query");
+    let stdout = run_z3(&query, "witness replay query");
     assert_eq!(
         stdout, "unsat",
-        "witness result or condition disagrees with XLS\n{query}"
+        "witness result or guard disagrees with XLS\n{query}"
     );
 }
 
-fn outcomes(paths: &[PathResult]) -> BTreeSet<ChoiceOutcome> {
-    paths
+fn outcomes(results: &[GuardedResult]) -> BTreeSet<SelectionOutcome> {
+    results
         .iter()
-        .flat_map(|path| path.trace.values().cloned())
+        .flat_map(|guarded| guarded.trace.values().cloned())
         .collect()
 }
 
@@ -127,40 +127,54 @@ fn assert_complete_partition_in_domain(
             )
         })
         .collect::<String>();
-    let coverage = match enumerated.paths.as_slice() {
+    let guards = enumerated
+        .results
+        .iter()
+        .map(|guarded| guarded.guard.as_smtlib())
+        .collect::<Vec<_>>();
+    let coverage = match guards.as_slice() {
         [] => "false".to_owned(),
-        [only] => only.condition.as_smtlib().to_owned(),
-        _ => format!(
-            "(or {})",
-            enumerated
-                .paths
+        [only] => (*only).to_owned(),
+        _ => format!("(or {})", guards.join(" ")),
+    };
+    let overlaps = guards
+        .iter()
+        .enumerate()
+        .flat_map(|(lhs_index, lhs)| {
+            guards
                 .iter()
-                .map(|path| path.condition.as_smtlib())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
+                .skip(lhs_index + 1)
+                .map(move |rhs| format!("(and {lhs} {rhs})"))
+        })
+        .collect::<Vec<_>>();
+    let overlap = match overlaps.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.clone(),
+        _ => format!("(or {})", overlaps.join(" ")),
     };
     let mut merged_leaves = Vec::new();
     merged.result.flatten_bits(&mut merged_leaves);
     let implications = enumerated
-        .paths
+        .results
         .iter()
-        .map(|path| {
-            let mut path_leaves = Vec::new();
-            path.result.flatten_bits(&mut path_leaves);
-            assert_eq!(path_leaves.len(), merged_leaves.len());
-            let equalities = path_leaves
+        .map(|guarded| {
+            let mut result_leaves = Vec::new();
+            guarded.result.flatten_bits(&mut result_leaves);
+            assert_eq!(result_leaves.len(), merged_leaves.len());
+            let equalities = result_leaves
                 .iter()
                 .zip(&merged_leaves)
-                .filter(|(path, _)| path.bit_count > 0)
-                .map(|(path, merged)| format!("(= {} {})", path.expression, merged.expression))
+                .filter(|(result_leaf, _)| result_leaf.bit_count > 0)
+                .map(|(result_leaf, merged)| {
+                    format!("(= {} {})", result_leaf.expression, merged.expression)
+                })
                 .collect::<Vec<_>>();
             let equality = match equalities.as_slice() {
                 [] => "true".to_owned(),
                 [only] => only.clone(),
                 _ => format!("(and {})", equalities.join(" ")),
             };
-            format!("(=> {} {equality})", path.condition.as_smtlib())
+            format!("(=> {} {equality})", guarded.guard.as_smtlib())
         })
         .collect::<Vec<_>>();
     let equivalence = match implications.as_slice() {
@@ -169,12 +183,12 @@ fn assert_complete_partition_in_domain(
         _ => format!("(and {})", implications.join(" ")),
     };
     let query = format!(
-        "{declarations}(assert (or (not (= {coverage} {domain})) (not {equivalence})))\n(check-sat)\n"
+        "{declarations}(assert (or (not (= {coverage} {domain})) {overlap} (not {equivalence})))\n(check-sat)\n"
     );
-    let stdout = run_z3(&query, "path-partition query");
+    let stdout = run_z3(&query, "selection-partition query");
     assert_eq!(
         stdout, "unsat",
-        "path domain is incomplete or piecewise result differs from merged evaluation\n{query}"
+        "selection partition is incomplete, overlapping, or differs from merged evaluation\n{query}"
     );
 }
 
@@ -191,16 +205,16 @@ top fn nested(x: bits[1] id=1, y: bits[1] id=2, a: bits[8] id=3, b: bits[8] id=4
     let result = enumerate_package(&package, "nested").unwrap();
     assert_complete_partition(&package, "nested", &result);
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 3);
+    assert_eq!(result.results.len(), 3);
     let mut lengths = result
-        .paths
+        .results
         .iter()
-        .map(|path| path.trace.len())
+        .map(|guarded| guarded.trace.len())
         .collect::<Vec<_>>();
     lengths.sort_unstable();
     assert_eq!(lengths, [1, 2, 2]);
-    for path in &result.paths {
-        assert_witness_replays(&function, path);
+    for guarded in &result.results {
+        assert_witness_replays(&function, guarded);
     }
 }
 
@@ -217,12 +231,22 @@ top fn correlated(x: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3, c: bits[8] 
     let result = enumerate_package(&package, "correlated").unwrap();
     assert_complete_partition(&package, "correlated", &result);
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 2);
+    assert_eq!(result.results.len(), 2);
     assert!(result.statistics.infeasible_candidates > 0);
-    assert!(result.paths.iter().any(|path| path.trace.len() == 1));
-    assert!(result.paths.iter().any(|path| path.trace.len() == 2));
-    for path in &result.paths {
-        assert_witness_replays(&function, path);
+    assert!(
+        result
+            .results
+            .iter()
+            .any(|guarded| guarded.trace.len() == 1)
+    );
+    assert!(
+        result
+            .results
+            .iter()
+            .any(|guarded| guarded.trace.len() == 2)
+    );
+    for guarded in &result.results {
+        assert_witness_replays(&function, guarded);
     }
 }
 
@@ -238,17 +262,17 @@ top fn priority(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id
     let priority = enumerate_package(&priority_package, "priority").unwrap();
     assert_complete_partition(&priority_package, "priority", &priority);
     assert_eq!(priority.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(priority.paths.len(), 3);
+    assert_eq!(priority.results.len(), 3);
     assert_eq!(
-        outcomes(&priority.paths),
+        outcomes(&priority.results),
         BTreeSet::from([
-            ChoiceOutcome::Case(0),
-            ChoiceOutcome::Case(1),
-            ChoiceOutcome::Default,
+            SelectionOutcome::Case(0),
+            SelectionOutcome::Case(1),
+            SelectionOutcome::Default,
         ])
     );
-    for path in &priority.paths {
-        assert_witness_replays(&priority_function, path);
+    for guarded in &priority.results {
+        assert_witness_replays(&priority_function, guarded);
     }
 
     let one_hot_ir = r#"package test
@@ -261,18 +285,18 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
     let one_hot = enumerate_package(&one_hot_package, "one_hot").unwrap();
     assert_complete_partition(&one_hot_package, "one_hot", &one_hot);
     assert_eq!(one_hot.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(one_hot.paths.len(), 4);
+    assert_eq!(one_hot.results.len(), 4);
     assert_eq!(
-        outcomes(&one_hot.paths),
+        outcomes(&one_hot.results),
         BTreeSet::from([
-            ChoiceOutcome::OneHotMask(vec![false, false]),
-            ChoiceOutcome::OneHotMask(vec![false, true]),
-            ChoiceOutcome::OneHotMask(vec![true, false]),
-            ChoiceOutcome::OneHotMask(vec![true, true]),
+            SelectionOutcome::OneHotMask(vec![false, false]),
+            SelectionOutcome::OneHotMask(vec![false, true]),
+            SelectionOutcome::OneHotMask(vec![true, false]),
+            SelectionOutcome::OneHotMask(vec![true, true]),
         ])
     );
-    for path in &one_hot.paths {
-        assert_witness_replays(&one_hot_function, path);
+    for guarded in &one_hot.results {
+        assert_witness_replays(&one_hot_function, guarded);
     }
 }
 
@@ -295,33 +319,33 @@ top fn select(s: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
     )
     .unwrap();
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 1);
-    assert_eq!(result.statistics.concrete_choices, 1);
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.statistics.concrete_selections, 1);
     assert_eq!(result.statistics.symbolic_outcomes, 0);
     assert_eq!(result.statistics.solver_queries, 1);
-    assert_eq!(result.paths[0].trace.len(), 1);
+    assert_eq!(result.results[0].trace.len(), 1);
     assert_eq!(
-        outcomes(&result.paths),
-        BTreeSet::from([ChoiceOutcome::Case(1)])
+        outcomes(&result.results),
+        BTreeSet::from([SelectionOutcome::Case(1)])
     );
     assert_eq!(
-        result.paths[0].result.as_bits().unwrap().expression,
+        result.results[0].result.as_bits().unwrap().expression,
         "symex_arg_2"
     );
-    assert_witness_replays(&function, &result.paths[0]);
+    assert_witness_replays(&function, &result.results[0]);
 }
 
 #[test]
-fn concrete_priority_and_one_hot_choices_record_without_forking() {
+fn concrete_priority_and_one_hot_selections_record_without_forking() {
     let ir = r#"package test
 
-top fn choices(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b: bits[8] id=4, d: bits[8] id=5) -> (bits[8], bits[8]) {
+top fn selections(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b: bits[8] id=4, d: bits[8] id=5) -> (bits[8], bits[8]) {
   p: bits[8] = priority_sel(priority, cases=[a, b], default=d, id=6)
   o: bits[8] = one_hot_sel(mask, cases=[a, b], id=7)
   ret result: (bits[8], bits[8]) = tuple(p, o, id=8)
 }
 "#;
-    let (_, function) = parse(ir, "choices");
+    let (_, function) = parse(ir, "selections");
     let result = enumerate_with_inputs(
         &function,
         &[
@@ -334,22 +358,22 @@ top fn choices(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b: b
     )
     .unwrap();
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 1);
-    assert_eq!(result.paths[0].trace.len(), 2);
-    assert_eq!(result.statistics.concrete_choices, 2);
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].trace.len(), 2);
+    assert_eq!(result.statistics.concrete_selections, 2);
     assert_eq!(result.statistics.symbolic_outcomes, 0);
     assert_eq!(
-        outcomes(&result.paths),
+        outcomes(&result.results),
         BTreeSet::from([
-            ChoiceOutcome::Case(1),
-            ChoiceOutcome::OneHotMask(vec![true, true]),
+            SelectionOutcome::Case(1),
+            SelectionOutcome::OneHotMask(vec![true, true]),
         ])
     );
-    assert_witness_replays(&function, &result.paths[0]);
+    assert_witness_replays(&function, &result.results[0]);
 }
 
 #[test]
-fn callsites_and_loop_iterations_have_distinct_choice_identities() {
+fn callsites_and_loop_iterations_have_distinct_selection_identities() {
     let invoke_ir = r#"package test
 
 fn choose(s: bits[1] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
@@ -366,20 +390,20 @@ top fn invoke_twice(x: bits[1] id=5, y: bits[1] id=6, a: bits[8] id=7, b: bits[8
     let invoked = enumerate_package(&invoke_package, "invoke_twice").unwrap();
     assert_complete_partition(&invoke_package, "invoke_twice", &invoked);
     assert_eq!(invoked.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(invoked.paths.len(), 4);
-    for path in &invoked.paths {
-        assert_eq!(path.trace.len(), 2);
-        let call_node_ids = path
+    assert_eq!(invoked.results.len(), 4);
+    for guarded in &invoked.results {
+        assert_eq!(guarded.trace.len(), 2);
+        let call_node_ids = guarded
             .trace
             .keys()
-            .flat_map(|choice| choice.invocation.iter())
+            .flat_map(|selection| selection.invocation.iter())
             .filter_map(|frame| match frame {
                 xlsynth_symex::InvocationFrame::Invoke { node_id, .. } => Some(*node_id),
                 xlsynth_symex::InvocationFrame::CountedFor { .. } => None,
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(call_node_ids, BTreeSet::from([9, 10]));
-        assert_witness_replays(&invoke_function, path);
+        assert_witness_replays(&invoke_function, guarded);
     }
 
     let loop_ir = r#"package test
@@ -398,25 +422,25 @@ top fn loop(s: bits[1] id=7, init: bits[8] id=8) -> bits[8] {
     let looped = enumerate_package(&loop_package, "loop").unwrap();
     assert_complete_partition(&loop_package, "loop", &looped);
     assert_eq!(looped.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(looped.paths.len(), 2);
-    for path in &looped.paths {
-        assert_eq!(path.trace.len(), 2);
-        let iterations = path
+    assert_eq!(looped.results.len(), 2);
+    for guarded in &looped.results {
+        assert_eq!(guarded.trace.len(), 2);
+        let iterations = guarded
             .trace
             .keys()
-            .flat_map(|choice| choice.invocation.iter())
+            .flat_map(|selection| selection.invocation.iter())
             .filter_map(|frame| match frame {
                 xlsynth_symex::InvocationFrame::CountedFor { iteration, .. } => Some(*iteration),
                 xlsynth_symex::InvocationFrame::Invoke { .. } => None,
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(iterations, BTreeSet::from([0, 1]));
-        assert_witness_replays(&loop_function, path);
+        assert_witness_replays(&loop_function, guarded);
     }
 }
 
 #[test]
-fn configured_path_limit_is_never_reported_as_complete() {
+fn configured_result_limit_is_never_reported_as_complete() {
     let ir = r#"package test
 
 top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
@@ -433,15 +457,15 @@ top fn one_hot(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3) -> bits[8] {
             EvaluationInput::Symbolic,
         ],
         &EnumerationOptions {
-            max_paths: Some(2),
+            max_results: Some(2),
             ..EnumerationOptions::default()
         },
     )
     .unwrap();
-    assert_eq!(result.paths.len(), 2);
+    assert_eq!(result.results.len(), 2);
     assert_eq!(
         result.completeness,
-        EnumerationCompleteness::Incomplete(IncompleteReason::PathLimit { limit: 2 })
+        EnumerationCompleteness::Incomplete(IncompleteReason::ResultLimit { limit: 2 })
     );
 }
 
@@ -455,7 +479,7 @@ top fn select(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
 "#;
     let (package, function) = parse(ir, "select");
     let options = EnumerationOptions {
-        max_paths: None,
+        max_results: None,
         constraints: vec![InputConstraint::Compare {
             operation: ConstraintComparison::UnsignedLessThan,
             lhs: ConstraintTerm::Input(InputLeaf::argument(0)),
@@ -471,18 +495,18 @@ top fn select(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
         "(bvult symex_arg_0 (_ bv2 2))",
     );
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 2);
+    assert_eq!(result.results.len(), 2);
     assert_eq!(
-        outcomes(&result.paths),
-        BTreeSet::from([ChoiceOutcome::Case(0), ChoiceOutcome::Case(1)])
+        outcomes(&result.results),
+        BTreeSet::from([SelectionOutcome::Case(0), SelectionOutcome::Case(1)])
     );
-    for path in &result.paths {
-        assert!(path.witness.inputs[0].to_u64().unwrap() < 2);
-        assert_witness_replays(&function, path);
+    for guarded in &result.results {
+        assert!(guarded.witness.inputs[0].to_u64().unwrap() < 2);
+        assert_witness_replays(&function, guarded);
     }
 
     let invalid = EnumerationOptions {
-        max_paths: None,
+        max_results: None,
         constraints: vec![InputConstraint::Compare {
             operation: ConstraintComparison::Equal,
             lhs: ConstraintTerm::Input(InputLeaf::argument(99)),
@@ -506,7 +530,7 @@ top fn select(input: (bits[1], bits[1]) id=1, a: bits[8] id=2, b: bits[8] id=3) 
     let (package, function) = parse(ir, "select");
     let selector_leaf = InputLeaf::argument(0).element(1);
     let options = EnumerationOptions {
-        max_paths: None,
+        max_results: None,
         constraints: vec![InputConstraint::Compare {
             operation: ConstraintComparison::Equal,
             lhs: ConstraintTerm::Input(selector_leaf.clone()),
@@ -518,10 +542,10 @@ top fn select(input: (bits[1], bits[1]) id=1, a: bits[8] id=2, b: bits[8] id=3) 
     let result = enumerate_package_with_options(&package, "select", &options).unwrap();
 
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 1);
+    assert_eq!(result.results.len(), 1);
     assert_eq!(
-        outcomes(&result.paths),
-        BTreeSet::from([ChoiceOutcome::Case(1)])
+        outcomes(&result.results),
+        BTreeSet::from([SelectionOutcome::Case(1)])
     );
     assert!(
         result
@@ -529,7 +553,7 @@ top fn select(input: (bits[1], bits[1]) id=1, a: bits[8] id=2, b: bits[8] id=3) 
             .iter()
             .any(|parameter| parameter.input == selector_leaf)
     );
-    assert_witness_replays(&function, &result.paths[0]);
+    assert_witness_replays(&function, &result.results[0]);
 }
 
 #[test]
@@ -544,9 +568,9 @@ top fn structured(s: bits[2] id=1, a: bits[4] id=2, b: bits[4] id=3) -> (bits[4]
 "#;
     let (package, function) = parse(ir, "structured");
     let result = enumerate_package(&package, "structured").unwrap();
-    assert_eq!(result.paths.len(), 4);
-    assert!(matches!(result.paths[0].result, SymbolicValue::Tuple(_)));
-    for path in &result.paths {
-        assert_witness_replays(&function, path);
+    assert_eq!(result.results.len(), 4);
+    assert!(matches!(result.results[0].result, SymbolicValue::Tuple(_)));
+    for guarded in &result.results {
+        assert_witness_replays(&function, guarded);
     }
 }

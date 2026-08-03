@@ -25,7 +25,7 @@ shorter loops include:
 ./dev.sh cargo fmt --all -- --check
 ./dev.sh cargo clippy --workspace --all-targets -- -D warnings
 ./dev.sh cargo test --workspace
-./dev.sh cargo test --test path_enumeration
+./dev.sh cargo test --test selection_enumeration
 ```
 
 Build the complete documentation site independently with:
@@ -58,11 +58,11 @@ changes as well.
 ## Repository map
 
 - `src/evaluator.rs`: merged symbolic evaluation and pure operation semantics.
-- `src/enumerator.rs`: path construction, trace policy, solving, and witnesses.
+- `src/enumerator.rs`: selection enumeration, trace policy, solving, and witnesses.
 - `src/expr.rs`: typed interned bit-vector expression DAG and SMT rendering.
 - `src/solver.rs`: Z3 process adapter and model parsing.
 - `src/lib.rs`: public types, options, results, and entry points.
-- `tests/`: semantic, differential, path, mutation, corpus, and release checks.
+- `tests/`: semantic, differential, selection, mutation, corpus, and release checks.
 - `tests/corpus/curated/`: pinned upstream fixtures and executable manifests.
 - `docs/user/`: public behavior and the checked support inventory.
 - `docs/developer/`: architecture, contribution, verification, and integration
@@ -85,7 +85,7 @@ The code is intended for eventual review in `xlsynth-crate`:
 Preserve the distinction between a hard error and incomplete enumeration. Bad
 IR, invalid API inputs, and inconsistent internal state are errors. Resource
 limits and solver indeterminacy produce an explicit incomplete result when
-useful partial paths can still be returned.
+useful guarded results can still be returned.
 
 ## Changing operation semantics
 
@@ -105,13 +105,13 @@ Do not classify an in-scope operation as unsupported merely because
 `xlsynth-pir` cannot currently represent it. Extend or explicitly bridge the IR
 layer, or document a genuine pure-function scope exclusion.
 
-## Changing path semantics
+## Changing selection semantics
 
 Changes to selection handling must preserve more than value equality. Add tests
-for exact conditions, canonical trace identities, structural inactivity,
+for exact guards, canonical trace identities, structural inactivity,
 feasibility pruning, deterministic order, and witness replay. When applicable,
 extend exhaustive concrete trace-set comparison and the mutation harness so an
-omitted, duplicated, relabeled, or incorrectly activated path is detected.
+omitted, duplicated, relabeled, or incorrectly activated selection is detected.
 
 Update the public contract in [`../user/guide.md`](../user/guide.md) and the
 internal mechanism in [`design.md`](design.md) in the same change. A new limit

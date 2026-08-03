@@ -10,13 +10,13 @@ proof of its own implementation.
 
 Verification has two independent obligations:
 
-1. **Value correctness:** every residual path result agrees with XLS semantics.
+1. **Value correctness:** every residual guarded result agrees with XLS semantics.
 2. **Enumeration completeness:** every feasible canonical trace under the
    declared policy and caller domain is present exactly once.
 
-A merged evaluator can calculate the right value while omitting paths. A set of
-conditions can cover the input domain while carrying incorrect values or trace
-labels. The evidence therefore checks values, conditions, and traces
+A merged evaluator can calculate the right value while omitting selection
+traces. A set of guards can cover the input domain while carrying incorrect
+values or trace labels. The evidence therefore checks values, guards, and traces
 separately.
 
 ## Semantic validation modes
@@ -44,33 +44,35 @@ establishes equivalence for that modeled function; `SAT` supplies a concrete
 counterexample. Timeout, `UNKNOWN`, and unsupported translation remain named
 non-passes.
 
-### Path-witness replay
+### Witness replay
 
-Every feasible enumerated path carries a solver model converted into complete
+Every feasible guarded result carries a solver model converted into complete
 typed XLS arguments. The XLS interpreter or JIT replays those arguments, checks
 the complete result, and confirms that the concrete canonical trace matches the
-symbolic trace. A witness establishes reachability and control behavior; other
-validation modes remain necessary for arithmetic values within the path.
+symbolic trace. A witness establishes feasibility and selection behavior; other
+validation modes remain necessary for arithmetic values within the guarded
+result.
 
 ## Completeness evidence
 
-The enumeration harness combines checks that fail when paths are missing,
+The enumeration harness combines checks that fail when selection traces are missing,
 duplicated, or mislabeled:
 
-- solver proof that the union of feasible path conditions covers the caller's
+- solver proof that the union of feasible guards covers the caller's
   constrained input domain;
+- solver proof that every pair of returned guards is disjoint;
 - solver proof that the piecewise enumerated result equals the merged result;
 - canonical-trace uniqueness and deterministic ordering;
-- per-choice outcome and cross-choice trace coverage;
+- per-selection outcome and cross-selection trace coverage;
 - exhaustive concrete trace-set comparison for bounded generated functions;
 - feasibility queries for neighboring outcomes;
 - witness result and trace replay;
 - comparison across concrete/symbolic argument partitions; and
 - mutations that omit, duplicate, relabel, weaken, strengthen, or incorrectly
-  activate paths and must be rejected by the harness.
+  activate selections and must be rejected by the harness.
 
 Merged-result equality is supporting evidence, not a completeness oracle. Two
-active choices may compute equal values, so trace-set and mutation checks are
+active selections may compute equal values, so trace-set and mutation checks are
 release requirements.
 
 ## Executable inventory
@@ -82,7 +84,7 @@ The evidence is layered and checked into the repository:
 | Operation and type coverage | [`../user/support-matrix.md`](../user/support-matrix.md) and [`tests/support_matrix.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/support_matrix.rs) |
 | Primitive and structural semantics | [`tests/operation_semantics.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/operation_semantics.rs) |
 | Generated value comparison | [`tests/differential.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/differential.rs) |
-| Choice and mixed-input semantics | [`tests/path_enumeration.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/path_enumeration.rs) |
+| Selection and mixed-input semantics | [`tests/selection_enumeration.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/selection_enumeration.rs) |
 | Coverage, trace sets, and mutations | [`tests/enumeration_completeness.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/enumeration_completeness.rs) |
 | Pinned upstream corpus | [`tests/curated_corpus.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/curated_corpus.rs) and [`validation.tsv`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/corpus/curated/validation.tsv) |
 | Bounded performance guard | [`tests/release_metrics.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/release_metrics.rs) |
@@ -93,7 +95,7 @@ the matrix test rejects missing targets and in-scope gaps.
 
 The offline curated corpus evaluates six functions in optimized and unoptimized
 IR. Its 12 rows account for 72 curated-vector replays, 20,488 deterministic
-fuzz replays, 21 all-symbolic path witnesses, and 28 one-argument-concrete
+fuzz replays, 21 all-symbolic witnesses, and 28 one-argument-concrete
 partitions. Completed enumerations check trace uniqueness, domain coverage,
 piecewise equality, result replay, and concrete trace replay.
 
@@ -123,7 +125,7 @@ dependency-cache `./dev.sh cargo test --workspace` run completed in 120.529
 seconds. The container cgroup peak was 1,768,996,864 bytes, including incremental
 compilation and the entire test suite; it is not evaluator-only memory.
 
-The executable path stress case enumerates all 64 masks of a six-case
+The executable selection stress case enumerates all 64 masks of a six-case
 `one_hot_sel`. Three warm release runs completed in 6.620, 6.627, and 7.639
 seconds. The median run spent 3 ms constructing the expression graph and 6.610
 seconds across 64 solver queries. The test enforces a conservative 30-second

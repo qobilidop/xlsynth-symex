@@ -1,15 +1,15 @@
 # User guide
 
 This guide is for Rust users of `xlsynth-symex`. It is the source of truth for
-the library's public semantics: what it evaluates, what a path means, and when
-an enumeration constitutes full coverage. Item-level signatures and fields
+the library's public semantics: what it evaluates, what a selection trace
+means, and when an enumeration constitutes full coverage. Item-level signatures and fields
 belong in the crate's Rust API documentation.
 
 ## When to use this library
 
 Use `xlsynth-symex` when you have a finite, pure XLS function and need either:
 
-- every feasible IR-level selection path and a concrete input reaching it; or
+- every feasible canonical selection trace and a concrete input realizing it; or
 - one merged symbolic result for equivalence checking or further SMT work.
 
 The primary use case is exhaustive test generation. Inputs may be concrete,
@@ -31,7 +31,7 @@ checked-in AMD64 container. It includes the required Z3 executable:
 ```
 
 The example parses an `IrPackage`, calls `enumerate_package`, checks
-`EnumerationResult::completeness`, and prints each trace and condition. The
+`EnumerationResult::completeness`, and prints each trace and guard. The
 complete source is
 [`examples/enumerate.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/examples/enumerate.rs).
 
@@ -50,32 +50,33 @@ a standalone `IrFunction` does not carry its callees.
 ## Reading a result
 
 An `EnumerationResult` contains shared symbolic parameters, deterministically
-ordered paths, explicit completeness, and construction/solver statistics. Each
-`PathResult` contains:
+ordered guarded results, explicit completeness, and construction/solver
+statistics. Each `GuardedResult` contains:
 
-- a feasible path condition, including caller assumptions;
+- a feasible guard, including caller assumptions;
 - a residual symbolic XLS value;
 - a sparse canonical selection trace; and
-- a complete concrete XLS input witness that reaches the path.
+- a complete concrete XLS input witness that realizes the trace.
 
-The path condition and residual bits expressions can be rendered as SMT-LIB.
+The guard and residual bits expressions can be rendered as SMT-LIB.
 Tuples and arrays remain recursive XLS values whose bits leaves carry symbolic
 expressions.
 
 ### Complete and incomplete results
 
-`EnumerationCompleteness::Complete` means that every feasible canonical path
-under the default path policy and caller constraints is present exactly once.
-Together, the returned conditions cover the constrained symbolic-input domain.
+`EnumerationCompleteness::Complete` means that every feasible canonical
+selection trace under the default selection policy and caller constraints is
+present exactly once. Together, the returned guards form a disjoint partition
+of the constrained symbolic-input domain.
 
-`Incomplete(reason)` means the paths may still be useful, but they are not full
-coverage. Reasons include a returned-path limit, the internal syntactic-branch
+`Incomplete(reason)` means the guarded results may still be useful, but they do
+not provide full coverage. Reasons include a returned-result limit, the internal syntactic-branch
 safety ceiling, and a failed, timed-out, or indeterminate solver query. Never
-infer completeness from the path count or from a successful function return.
+infer completeness from the result count or from a successful function return.
 
 The default solver timeout is ten seconds per feasibility/model query. The
-internal safety ceiling is 1,000,000 syntactic branches. `max_paths` limits the
-number of paths returned; the current implementation constructs and solves
+internal safety ceiling is 1,000,000 syntactic branches. `max_results` limits the
+number of guarded results returned; the current implementation constructs and solves
 candidates before truncating the result, so it is not a computational budget.
 
 ## Inputs and assumptions
@@ -86,9 +87,9 @@ candidates before truncating the result, so it is not a computational budget.
 - `Concrete(IrValue)` supplies a fully concrete value; and
 - `Tuple` and `Array` independently describe their elements.
 
-Concrete choices are resolved without symbolic forking and do not demand
+Concrete selections are resolved without symbolic forking and do not demand
 inactive case cones. They still appear in the trace when they are active, which
-makes witness replay describe the same choice map as symbolic enumeration.
+makes witness replay describe the same selection map as symbolic enumeration.
 
 `EnumerationOptions::constraints` narrows the covered domain. Constraints are
 backend-neutral expressions over `InputLeaf` identities: an argument index
@@ -96,12 +97,12 @@ followed by tuple or array element indices. They do not depend on generated Z3
 names. When enumeration is complete, it is complete exactly within the domain
 satisfying those assumptions.
 
-## What a path means
+## Selection semantics
 
-XLS IR is an eager dataflow graph, not a control-flow graph. A path is therefore
-a canonical partial valuation of declared selection nodes in the demanded
-dynamic slice. It is not a sequence of executed basic blocks and is not a
-stable reconstruction of DSLX source branches.
+XLS IR is an eager dataflow graph, not a control-flow graph. A canonical
+selection trace is therefore a sparse map from active selection sites to their
+outcomes in the demanded dynamic slice. It is not a sequence of executed basic
+blocks and is not a stable reconstruction of DSLX source branches.
 
 The default policy is:
 
@@ -110,18 +111,18 @@ The default policy is:
   default, excluding all higher-priority cases;
 - `one_hot_sel`: one outcome for each feasible selected-case bitmask, or the
   feasible one-hot outcomes when a one-hot assumption is established; and
-- nested choices: no trace entry when an outer outcome makes a choice
+- nested selections: no trace entry when an outer outcome makes a selection
   structurally inactive.
 
-A demanded choice remains active even if all of its cases happen to calculate
+A demanded selection remains active even if all of its cases happen to calculate
 the same value. Dynamic array indices, bit-slice positions, shift amounts, and
 similar data selectors are ordinary symbolic data under the default policy;
-they are not additional path sites.
+they are not additional selection sites.
 
-Choice identities include the function and XLS node id, plus callsite and loop
+Selection identities include the function and XLS node id, plus callsite and loop
 iteration context. They are deterministic for one exact evaluation artifact,
 but are not stable across IR optimization, node renumbering, input partitions,
-or path-policy changes.
+or selection-policy changes.
 
 ## Supported semantic domain
 
@@ -140,7 +141,7 @@ The following remain deliberately outside the project boundary:
 - general or unbounded memory;
 - cyclic or nonterminating recursion;
 - instruction fetch, ISA dispatch, and instruction-sequence exploration; and
-- stable DSLX source-path reconstruction.
+- stable reconstruction of DSLX source-level branches.
 
 An XLS array is an ordinary finite value, not a solver or processor memory
 model. Explicit state encoded in function arguments and results is supported.
@@ -150,16 +151,17 @@ model. Explicit state encoded in function arguments and results is supported.
 The `evaluate*` entry points preserve selections as symbolic expressions such
 as `ite` and return one `SymexResult`. Merged evaluation is useful for compact
 whole-function representation, symbolic equivalence checking, and retaining
-symbolic data operations inside an enumerated path.
+symbolic data operations inside an enumerated guarded result.
 
-Merged evaluation does not provide explicit path coverage. Use `enumerate*`
-when generating tests or making a claim about every feasible canonical path.
+Merged evaluation does not provide explicit selection-trace coverage. Use
+`enumerate*` when generating tests or making a claim about every feasible
+canonical selection trace.
 
 ## Performance expectations
 
 Symbolic construction is generally small compared with solver work. The
 current adapter starts a fresh Z3 process for each candidate, so runtime grows
-roughly with the number and difficulty of path queries, while selection
+roughly with the number and difficulty of guard queries, while selection
 combinations can grow exponentially. Release-mode Rust optimization therefore
 has little effect on solver-dominated workloads.
 

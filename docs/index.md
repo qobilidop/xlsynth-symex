@@ -1,16 +1,16 @@
 # xlsynth-symex documentation
 
-`xlsynth-symex` symbolically evaluates finite, pure XLS functions and enumerates
-every feasible canonical IR selection path with its condition, residual result,
-selection trace, and concrete witness.
+`xlsynth-symex` symbolically evaluates finite, pure XLS functions and produces a
+complete partition of every feasible canonical IR selection trace, with its
+guard, residual result, and concrete witness.
 
 ```text
 pure XLS function + concrete/symbolic inputs
-    -> every feasible canonical path
-       + condition + result + selection trace + concrete witness
+    -> complete selection partition
+       + canonical trace + guard + residual result + concrete witness
 ```
 
-Start with the [user guide](user/guide.md) to understand the public API, path
+Start with the [user guide](user/guide.md) to understand the public API, selection
 semantics, completeness contract, supported domain, and performance limits. The
 [operation support matrix](user/support-matrix.md) is the checked inventory for
 the pinned XLS toolchain.

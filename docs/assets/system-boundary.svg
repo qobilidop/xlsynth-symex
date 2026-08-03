@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
   <title id="title">System boundary and ownership layers of xlsynth-symex</title>
-  <desc id="desc">DSLX or textual IR is compiled and parsed by xlsynth, traversed through xlsynth-pir, evaluated by the backend-neutral xlsynth-symex core, and optionally sent through a replaceable Z3 adapter. Path witnesses are replayed through the independent XLS interpreter, while whole-machine execution remains downstream.</desc>
+  <desc id="desc">DSLX or textual IR is compiled and parsed by xlsynth, traversed through xlsynth-pir, evaluated by the backend-neutral xlsynth-symex core, and optionally sent through a replaceable Z3 adapter. Selection witnesses are replayed through the independent XLS interpreter, while whole-machine execution remains downstream.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
@@ -83,11 +83,11 @@
   <text class="small" x="474" y="539" text-anchor="middle">one symbolic result</text>
 
   <rect class="core-part" x="604" y="492" width="204" height="56" rx="11"/>
-  <text class="label" x="706" y="518" text-anchor="middle">path engine</text>
-  <text class="small" x="706" y="539" text-anchor="middle">conditions · traces</text>
+  <text class="label" x="706" y="518" text-anchor="middle">selection engine</text>
+  <text class="small" x="706" y="539" text-anchor="middle">guards · traces</text>
 
   <path class="edge" d="M840 462 L900 462"/>
-  <text class="tiny" x="830" y="446" text-anchor="end">typed condition</text>
+  <text class="tiny" x="830" y="446" text-anchor="end">typed guard</text>
   <rect class="solver" x="900" y="382" width="120" height="160" rx="14"/>
   <text class="label" x="960" y="416" text-anchor="middle">solver</text>
   <text class="label" x="960" y="438" text-anchor="middle">adapter</text>
@@ -103,7 +103,7 @@
   <path class="return-edge" d="M590 572 L590 630"/>
   <rect class="output" x="386" y="630" width="408" height="86" rx="14"/>
   <text class="label" x="590" y="660" text-anchor="middle">typed public results</text>
-  <text class="small" x="590" y="685" text-anchor="middle">conditions · residual values · traces · witnesses</text>
+  <text class="small" x="590" y="685" text-anchor="middle">guards · residual values · traces · witnesses</text>
   <text class="small" x="590" y="706" text-anchor="middle">explicit complete or incomplete status</text>
 
   <path class="return-edge" d="M386 674 C250 674 218 610 218 520"/>

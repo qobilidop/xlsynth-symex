@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
-  <title id="title">Lifecycle of an enumerated candidate path</title>
-  <desc id="desc">Demand-driven evaluation creates guarded candidate states containing a condition, sparse trace, and memoized values. Caller constraints are conjoined before a solver query. Satisfiable candidates become PathResults with typed witnesses, unsatisfiable candidates are pruned, and indeterminate queries make the overall enumeration incomplete. Invalid inputs, malformed IR, and model reconstruction failures remain errors rather than solver outcomes.</desc>
+  <title id="title">Lifecycle of an enumerated candidate</title>
+  <desc id="desc">Demand-driven evaluation creates candidate states containing a guard, sparse trace, and memoized values. Caller constraints are conjoined before a solver query. Satisfiable candidates become GuardedResults with typed witnesses, unsatisfiable candidates are pruned, and indeterminate queries make the overall enumeration incomplete. Invalid inputs, malformed IR, and model reconstruction failures remain errors rather than solver outcomes.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
@@ -36,7 +36,7 @@
   </defs>
 
   <rect class="bg" width="1200" height="780" rx="18"/>
-  <text class="title" x="40" y="46">From demanded result to feasible path and witness</text>
+  <text class="title" x="40" y="46">From demanded value to guarded result and witness</text>
   <text class="subtitle" x="40" y="73">Construction is syntactic; feasibility is a separate solver decision with explicit outcomes.</text>
 
   <text class="heading" x="50" y="116">1 · DEMAND</text>
@@ -44,7 +44,7 @@
   <text class="label" x="135" y="165" text-anchor="middle">return node</text>
   <path class="edge" d="M135 181 L135 216"/>
   <rect class="panel" x="67" y="216" width="136" height="62" rx="11"/>
-  <text class="label" x="135" y="242" text-anchor="middle">outer choice</text>
+  <text class="label" x="135" y="242" text-anchor="middle">outer selection</text>
   <text class="mono" x="135" y="264" text-anchor="middle">sel(x; …)</text>
   <path class="edge" d="M106 278 L80 316"/>
   <path class="edge" d="M164 278 L190 316"/>
@@ -59,11 +59,11 @@
   <rect class="candidate" x="276" y="132" width="224" height="270" rx="15"/>
   <text class="label" x="388" y="164" text-anchor="middle">candidate state</text>
   <rect class="panel" x="302" y="187" width="172" height="46" rx="9"/>
-  <text class="mono" x="388" y="216" text-anchor="middle">condition: x = 0</text>
+  <text class="mono" x="388" y="216" text-anchor="middle">guard: x = 0</text>
   <rect class="panel" x="302" y="243" width="172" height="46" rx="9"/>
   <text class="mono" x="388" y="272" text-anchor="middle">trace: outer = 0</text>
   <rect class="panel" x="302" y="299" width="172" height="38" rx="9"/>
-  <text class="small" x="388" y="323" text-anchor="middle">path-local memoized values</text>
+  <text class="small" x="388" y="323" text-anchor="middle">candidate-local memoized values</text>
   <text class="tiny" x="388" y="374" text-anchor="middle">One state per declared</text>
   <text class="tiny" x="388" y="391" text-anchor="middle">policy outcome.</text>
 
@@ -71,7 +71,7 @@
 
   <text class="heading" x="556" y="116">3 · CONSTRAIN</text>
   <rect class="constraint" x="546" y="132" width="200" height="270" rx="15"/>
-  <text class="label" x="646" y="164" text-anchor="middle">typed Boolean condition</text>
+  <text class="label" x="646" y="164" text-anchor="middle">typed Boolean guard</text>
   <rect class="panel" x="570" y="196" width="152" height="50" rx="9"/>
   <text class="mono" x="646" y="226" text-anchor="middle">x = 0</text>
   <text class="label" x="646" y="277" text-anchor="middle">∧</text>
@@ -97,8 +97,8 @@
   <path class="green-edge" d="M960 188 L994 188"/>
   <rect class="sat" x="994" y="112" width="176" height="158" rx="14"/>
   <text class="status-green" x="1012" y="136">SAT</text>
-  <text class="label" x="1082" y="163" text-anchor="middle">PathResult</text>
-  <text class="small" x="1082" y="189" text-anchor="middle">condition + value</text>
+  <text class="label" x="1082" y="163" text-anchor="middle">GuardedResult</text>
+  <text class="small" x="1082" y="189" text-anchor="middle">guard + residual result</text>
   <text class="small" x="1082" y="212" text-anchor="middle">canonical trace</text>
   <text class="small" x="1082" y="235" text-anchor="middle">typed XLS witness</text>
   <text class="tiny" x="1082" y="255" text-anchor="middle">model + concrete inputs</text>
@@ -107,12 +107,12 @@
   <rect class="unsat" x="994" y="296" width="176" height="84" rx="14"/>
   <text class="status-gray" x="1012" y="316">UNSAT</text>
   <text class="label" x="1082" y="342" text-anchor="middle">prune candidate</text>
-  <text class="small" x="1082" y="366" text-anchor="middle">not a feasible path</text>
+  <text class="small" x="1082" y="366" text-anchor="middle">not a feasible candidate</text>
 
   <path class="amber-edge" d="M960 302 L994 461"/>
   <rect class="unknown" x="994" y="416" width="176" height="120" rx="14"/>
   <text class="status-amber" x="1082" y="440" text-anchor="middle">UNKNOWN / TIMEOUT</text>
-  <text class="label" x="1082" y="465" text-anchor="middle">keep partial paths</text>
+  <text class="label" x="1082" y="465" text-anchor="middle">keep partial results</text>
   <text class="small" x="1082" y="491" text-anchor="middle">mark enumeration</text>
   <text class="mono" x="1082" y="516" text-anchor="middle">Incomplete(reason)</text>
 
@@ -129,7 +129,7 @@
 
   <rect x="622" y="560" width="304" height="72" rx="11" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
   <text class="small" x="774" y="583" text-anchor="middle">Limits and indeterminate solving</text>
-  <text class="small" x="774" y="602" text-anchor="middle">produce useful partial paths with</text>
+  <text class="small" x="774" y="602" text-anchor="middle">produce useful partial results with</text>
   <text class="small" x="774" y="621" text-anchor="middle">explicit incomplete status.</text>
 
   <rect x="240" y="712" width="720" height="34" rx="17" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>

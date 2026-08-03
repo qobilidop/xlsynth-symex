@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# id	ir_form	curated_vector_differential	differential_fuzz	symbolic_equivalence	path_witness_replay
+# id	ir_form	curated_vector_differential	differential_fuzz	symbolic_equivalence	selection_witness_replay
 tiny_adder	unoptimized	pass:4	pass:4	unsat	pass:1
 tiny_adder	optimized	pass:4	pass:4	unsat	pass:1
 nested_sel	unoptimized	pass:9	pass:2048	unsat	pass:5

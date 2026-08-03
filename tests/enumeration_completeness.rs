@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use xlsynth::IrPackage;
 use xlsynth_symex::{
-    ChoiceId, ChoiceOutcome, EnumerationCompleteness, EnumerationResult, InvocationFrame,
+    EnumerationCompleteness, EnumerationResult, InvocationFrame, SelectionId, SelectionOutcome,
     enumerate_package, evaluate_package,
 };
 
@@ -24,7 +24,6 @@ enum SelectionTree {
         default: Box<SelectionTree>,
     },
 }
-
 struct DeterministicRng(u64);
 
 impl DeterministicRng {
@@ -96,7 +95,7 @@ fn render_generated_function(seed: u64) -> (String, SelectionTree) {
 fn concrete_tree_trace(
     tree: &SelectionTree,
     selectors: &[usize; 3],
-    trace: &mut BTreeMap<usize, ChoiceOutcome>,
+    trace: &mut BTreeMap<usize, SelectionOutcome>,
 ) {
     let SelectionTree::Sel {
         node_id,
@@ -109,19 +108,20 @@ fn concrete_tree_trace(
     };
     let value = selectors[*selector];
     let (outcome, selected) = match value {
-        0 | 1 => (ChoiceOutcome::Case(value), cases[value].as_ref()),
-        _ => (ChoiceOutcome::Default, default.as_ref()),
+        0 | 1 => (SelectionOutcome::Case(value), cases[value].as_ref()),
+        _ => (SelectionOutcome::Default, default.as_ref()),
     };
     assert!(trace.insert(*node_id, outcome).is_none());
     concrete_tree_trace(selected, selectors, trace);
 }
 
-fn static_trace(path: &xlsynth_symex::PathResult) -> BTreeMap<usize, ChoiceOutcome> {
-    path.trace
+fn static_trace(guarded: &xlsynth_symex::GuardedResult) -> BTreeMap<usize, SelectionOutcome> {
+    guarded
+        .trace
         .iter()
-        .map(|(choice, outcome)| {
-            assert!(choice.invocation.is_empty());
-            (choice.node_id, outcome.clone())
+        .map(|(selection, outcome)| {
+            assert!(selection.invocation.is_empty());
+            (selection.node_id, outcome.clone())
         })
         .collect()
 }
@@ -144,11 +144,11 @@ fn generated_selection_trees_match_exhaustive_concrete_trace_sets() {
             "seed {seed:016x}"
         );
         let actual = enumerated
-            .paths
+            .results
             .iter()
             .map(static_trace)
             .collect::<BTreeSet<_>>();
-        assert_eq!(actual.len(), enumerated.paths.len());
+        assert_eq!(actual.len(), enumerated.results.len());
         let mut expected = BTreeSet::new();
         for packed in 0..64 {
             let selectors = [packed & 3, (packed >> 2) & 3, (packed >> 4) & 3];
@@ -174,7 +174,7 @@ top fn generated(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b:
     let enumerated = enumerate_package(&package, "generated").unwrap();
     assert_eq!(enumerated.completeness, EnumerationCompleteness::Complete);
     let actual = enumerated
-        .paths
+        .results
         .iter()
         .map(static_trace)
         .collect::<BTreeSet<_>>();
@@ -182,17 +182,17 @@ top fn generated(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b:
     for priority in 0..4 {
         for mask in 0..4 {
             let priority_outcome = if priority & 1 != 0 {
-                ChoiceOutcome::Case(0)
+                SelectionOutcome::Case(0)
             } else if priority & 2 != 0 {
-                ChoiceOutcome::Case(1)
+                SelectionOutcome::Case(1)
             } else {
-                ChoiceOutcome::Default
+                SelectionOutcome::Default
             };
             expected.insert(BTreeMap::from([
                 (6, priority_outcome),
                 (
                     7,
-                    ChoiceOutcome::OneHotMask(vec![mask & 1 != 0, mask & 2 != 0]),
+                    SelectionOutcome::OneHotMask(vec![mask & 1 != 0, mask & 2 != 0]),
                 ),
             ]));
         }
@@ -203,19 +203,19 @@ top fn generated(priority: bits[2] id=1, mask: bits[2] id=2, a: bits[8] id=3, b:
 
 #[derive(Clone)]
 struct Candidate {
-    condition: String,
+    guard: String,
     result: String,
-    trace: BTreeMap<ChoiceId, ChoiceOutcome>,
+    trace: BTreeMap<SelectionId, SelectionOutcome>,
 }
 
 fn candidates(enumerated: &EnumerationResult) -> Vec<Candidate> {
     enumerated
-        .paths
+        .results
         .iter()
-        .map(|path| Candidate {
-            condition: path.condition.as_smtlib().to_owned(),
-            result: path.result.as_bits().unwrap().expression.clone(),
-            trace: path.trace.clone(),
+        .map(|guarded| Candidate {
+            guard: guarded.guard.as_smtlib().to_owned(),
+            result: guarded.result.as_bits().unwrap().expression.clone(),
+            trace: guarded.trace.clone(),
         })
         .collect()
 }
@@ -223,7 +223,7 @@ fn candidates(enumerated: &EnumerationResult) -> Vec<Candidate> {
 fn verifier_accepts(
     enumerated: &EnumerationResult,
     merged: &str,
-    expected_traces: &BTreeSet<BTreeMap<ChoiceId, ChoiceOutcome>>,
+    expected_traces: &BTreeSet<BTreeMap<SelectionId, SelectionOutcome>>,
     candidates: &[Candidate],
 ) -> bool {
     let traces = candidates
@@ -247,23 +247,36 @@ fn verifier_accepts(
         "(or {})",
         candidates
             .iter()
-            .map(|candidate| candidate.condition.as_str())
+            .map(|candidate| candidate.guard.as_str())
             .collect::<Vec<_>>()
             .join(" ")
     );
+    let overlaps = candidates
+        .iter()
+        .enumerate()
+        .flat_map(|(lhs_index, lhs)| {
+            candidates
+                .iter()
+                .skip(lhs_index + 1)
+                .map(move |rhs| format!("(and {} {})", lhs.guard, rhs.guard))
+        })
+        .collect::<Vec<_>>();
+    let overlap = match overlaps.as_slice() {
+        [] => "false".to_owned(),
+        [only] => only.clone(),
+        _ => format!("(or {})", overlaps.join(" ")),
+    };
     let equivalence = format!(
         "(and {})",
         candidates
             .iter()
-            .map(|candidate| format!(
-                "(=> {} (= {} {merged}))",
-                candidate.condition, candidate.result
-            ))
+            .map(|candidate| format!("(=> {} (= {} {merged}))", candidate.guard, candidate.result))
             .collect::<Vec<_>>()
             .join(" ")
     );
-    let query =
-        format!("{declarations}(assert (or (not {coverage}) (not {equivalence})))\n(check-sat)\n");
+    let query = format!(
+        "{declarations}(assert (or (not {coverage}) {overlap} (not {equivalence})))\n(check-sat)\n"
+    );
     run_z3(&query, "enumeration-completeness query") == "unsat"
 }
 
@@ -315,7 +328,7 @@ top fn choose(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
     ));
 
     let mut relabeled = baseline.clone();
-    *relabeled[0].trace.values_mut().next().unwrap() = ChoiceOutcome::Case(1);
+    *relabeled[0].trace.values_mut().next().unwrap() = SelectionOutcome::Case(1);
     assert!(!verifier_accepts(
         &enumerated,
         &merged,
@@ -324,7 +337,7 @@ top fn choose(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
     ));
 
     let mut weakened = baseline.clone();
-    weakened[0].condition = "true".to_owned();
+    weakened[0].guard = "true".to_owned();
     assert!(!verifier_accepts(
         &enumerated,
         &merged,
@@ -333,10 +346,7 @@ top fn choose(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
     ));
 
     let mut strengthened = baseline.clone();
-    strengthened[0].condition = format!(
-        "(and {} (= symex_arg_1 #b00000000))",
-        strengthened[0].condition
-    );
+    strengthened[0].guard = format!("(and {} (= symex_arg_1 #b00000000))", strengthened[0].guard);
     assert!(!verifier_accepts(
         &enumerated,
         &merged,
@@ -346,7 +356,7 @@ top fn choose(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
 
     let mut incorrectly_active = baseline.clone();
     incorrectly_active[0].trace.insert(
-        ChoiceId {
+        SelectionId {
             function: "choose".to_owned(),
             node_id: 99,
             invocation: vec![InvocationFrame::Invoke {
@@ -354,7 +364,7 @@ top fn choose(s: bits[2] id=1, a: bits[8] id=2, b: bits[8] id=3, d: bits[8] id=4
                 node_id: 98,
             }],
         },
-        ChoiceOutcome::Case(0),
+        SelectionOutcome::Case(0),
     );
     assert!(!verifier_accepts(
         &enumerated,

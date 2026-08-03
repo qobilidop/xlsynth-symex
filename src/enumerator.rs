@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Canonical path enumeration over demanded XLS selection operations.
+//! Canonical selection enumeration over demanded XLS selection operations.
 //!
 //! The evaluator forks at active `sel`, `priority_sel`, and `one_hot_sel`
-//! nodes. Choices in structurally inactive dataflow remain absent from the
-//! trace, and solver feasibility pruning turns syntactic candidates into paths.
+//! nodes. Selections in structurally inactive dataflow remain absent from the
+//! trace, and solver feasibility pruning turns syntactic candidates into
+//! guarded results.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
@@ -21,13 +22,13 @@ use crate::evaluator::{
 use crate::expr::{BitBinaryOp, BitUnaryOp, CompareOp, ExprArena, ExprId, Sort};
 use crate::solver::{self, Satisfiability};
 use crate::{
-    ChoiceId, ChoiceOutcome, ConstraintComparison, ConstraintTerm, EnumerationCompleteness,
-    EnumerationOptions, EnumerationResult, EnumerationStatistics, EvaluationInput,
-    IncompleteReason, InputConstraint, InputLeaf, InvocationFrame, PathCondition, PathResult,
-    PathWitness, SymbolicParameter,
+    ConstraintComparison, ConstraintTerm, EnumerationCompleteness, EnumerationOptions,
+    EnumerationResult, EnumerationStatistics, EvaluationInput, Guard, GuardedResult,
+    IncompleteReason, InputConstraint, InputLeaf, InvocationFrame, SelectionId, SelectionOutcome,
+    SelectionTrace, SymbolicParameter, Witness,
 };
 
-const SYNTACTIC_PATH_SAFETY_LIMIT: usize = 1_000_000;
+const SYNTACTIC_CANDIDATE_SAFETY_LIMIT: usize = 1_000_000;
 
 pub(crate) fn enumerate_function_text(
     function_text: &str,
@@ -117,25 +118,25 @@ fn enumerate_parsed(
         .iter()
         .map(|constraint| lower_constraint(&mut arena, &parameters, constraint))
         .collect::<Result<Vec<_>, _>>()?;
-    let initial_condition = arena.bool_and(assumptions);
+    let initial_guard = arena.bool_and(assumptions);
     let frame = Frame {
         function,
         arguments,
         invocation: Vec::new(),
     };
     let initial = State {
-        condition: initial_condition,
+        guard: initial_guard,
         trace: BTreeMap::new(),
         cache: HashMap::new(),
     };
-    let mut evaluator = PathEvaluator {
+    let mut evaluator = SelectionEvaluator {
         package,
         arena: &mut arena,
-        syntactic_paths: 1,
+        syntactic_candidates: 1,
         incomplete: None,
         evaluated_nodes: 0,
         cache_hits: 0,
-        concrete_choices: 0,
+        concrete_selections: 0,
         symbolic_outcomes: 0,
     };
     let ret = function
@@ -145,7 +146,7 @@ fn enumerate_parsed(
     let construction_time = construction_started.elapsed();
     let evaluated_nodes = evaluator.evaluated_nodes;
     let cache_hits = evaluator.cache_hits;
-    let concrete_choices = evaluator.concrete_choices;
+    let concrete_selections = evaluator.concrete_selections;
     let symbolic_outcomes = evaluator.symbolic_outcomes;
     let incomplete = evaluator.incomplete.take();
     drop(evaluator);
@@ -164,23 +165,23 @@ fn enumerate_parsed(
         candidates,
         completeness,
     )?;
-    solved.paths.sort_by(|lhs, rhs| lhs.trace.cmp(&rhs.trace));
-    if let Some(limit) = options.max_paths
-        && solved.paths.len() > limit
+    solved.results.sort_by(|lhs, rhs| lhs.trace.cmp(&rhs.trace));
+    if let Some(limit) = options.max_results
+        && solved.results.len() > limit
     {
-        solved.paths.truncate(limit);
+        solved.results.truncate(limit);
         solved.completeness =
-            EnumerationCompleteness::Incomplete(IncompleteReason::PathLimit { limit });
+            EnumerationCompleteness::Incomplete(IncompleteReason::ResultLimit { limit });
     }
     Ok(EnumerationResult {
         parameters,
-        paths: solved.paths,
+        results: solved.results,
         completeness: solved.completeness,
         statistics: EnumerationStatistics {
             expression_nodes: arena.node_count(),
             evaluated_nodes,
             cache_hits,
-            concrete_choices,
+            concrete_selections,
             symbolic_outcomes,
             solver_queries: solved.solver_queries,
             infeasible_candidates: solved.infeasible_candidates,
@@ -313,8 +314,8 @@ struct Frame<'a> {
 
 #[derive(Clone)]
 struct State {
-    condition: ExprId,
-    trace: BTreeMap<ChoiceId, ChoiceOutcome>,
+    guard: ExprId,
+    trace: SelectionTrace,
     cache: HashMap<NodeKey, Value>,
 }
 
@@ -332,7 +333,7 @@ struct SolvingContext<'a> {
 }
 
 struct SolvedCandidates {
-    paths: Vec<PathResult>,
+    results: Vec<GuardedResult>,
     completeness: EnumerationCompleteness,
     solver_queries: usize,
     infeasible_candidates: usize,
@@ -345,17 +346,17 @@ fn solve_candidates(
     candidates: Vec<Evaluated>,
     mut completeness: EnumerationCompleteness,
 ) -> Result<SolvedCandidates, XlsynthError> {
-    let mut paths = Vec::new();
+    let mut results = Vec::new();
     let mut seen_traces = BTreeSet::new();
     let mut solver_queries = 0;
     let mut infeasible_candidates = 0;
     let mut solver_time = Duration::ZERO;
 
     for candidate in candidates {
-        let condition = context.arena.to_smtlib(candidate.state.condition);
+        let guard = context.arena.to_smtlib(candidate.state.guard);
         solver_queries += 1;
         let solver_started = Instant::now();
-        let solved = solver::solve(context.parameters, &condition, context.timeout);
+        let solved = solver::solve(context.parameters, &guard, context.timeout);
         solver_time += solver_started.elapsed();
         let model = match solved {
             Ok(Satisfiability::Sat(model)) => model,
@@ -381,8 +382,8 @@ fn solve_candidates(
             ));
         }
         let witness = build_witness(context.function, context.inputs, context.parameters, &model)?;
-        paths.push(PathResult {
-            condition: PathCondition::from_smtlib(condition),
+        results.push(GuardedResult {
+            guard: Guard::from_smtlib(guard),
             result: materialize_value(context.arena, &candidate.value),
             trace: candidate.state.trace,
             witness,
@@ -390,7 +391,7 @@ fn solve_candidates(
     }
 
     Ok(SolvedCandidates {
-        paths,
+        results,
         completeness,
         solver_queries,
         infeasible_candidates,
@@ -398,19 +399,19 @@ fn solve_candidates(
     })
 }
 
-struct PathEvaluator<'a> {
+struct SelectionEvaluator<'a> {
     package: &'a Package,
     arena: &'a mut ExprArena,
-    syntactic_paths: usize,
+    syntactic_candidates: usize,
     incomplete: Option<IncompleteReason>,
     evaluated_nodes: usize,
     cache_hits: usize,
-    concrete_choices: usize,
+    concrete_selections: usize,
     symbolic_outcomes: usize,
 }
 
-impl PathEvaluator<'_> {
-    /// Demand-evaluates a node while preserving each forked path state.
+impl SelectionEvaluator<'_> {
+    /// Demand-evaluates a node while preserving each forked candidate state.
     fn eval_node(
         &mut self,
         frame: &Frame<'_>,
@@ -533,14 +534,17 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
-                self.concrete_choices += 1;
+                self.concrete_selections += 1;
                 let index = bits_to_usize(&concrete);
                 let outcome = index
                     .filter(|index| *index < cases.len())
-                    .map_or(ChoiceOutcome::Default, ChoiceOutcome::Case);
+                    .map_or(SelectionOutcome::Default, SelectionOutcome::Case);
                 let case_ref = concrete_sel_case(&concrete, cases, default)?;
-                let state =
-                    Self::record_choice(selected.state, Self::choice_id(frame, node_ref), outcome)?;
+                let state = Self::record_selection(
+                    selected.state,
+                    Self::selection_id(frame, node_ref),
+                    outcome,
+                )?;
                 results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
@@ -549,7 +553,7 @@ impl PathEvaluator<'_> {
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    Self::choice_id(frame, node_ref),
+                    Self::selection_id(frame, node_ref),
                     outcome,
                     guard,
                 ) else {
@@ -576,7 +580,7 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "priority_sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
-                self.concrete_choices += 1;
+                self.concrete_selections += 1;
                 let selected_case = cases
                     .iter()
                     .enumerate()
@@ -585,11 +589,14 @@ impl PathEvaluator<'_> {
                     })
                     .map(|(index, case_ref)| (index, *case_ref));
                 let (outcome, case_ref) = selected_case
-                    .map_or((ChoiceOutcome::Default, default), |(index, case_ref)| {
-                        (ChoiceOutcome::Case(index), case_ref)
+                    .map_or((SelectionOutcome::Default, default), |(index, case_ref)| {
+                        (SelectionOutcome::Case(index), case_ref)
                     });
-                let state =
-                    Self::record_choice(selected.state, Self::choice_id(frame, node_ref), outcome)?;
+                let state = Self::record_selection(
+                    selected.state,
+                    Self::selection_id(frame, node_ref),
+                    outcome,
+                )?;
                 results.extend(self.eval_node(frame, case_ref, state)?);
                 continue;
             }
@@ -598,7 +605,7 @@ impl PathEvaluator<'_> {
             for (outcome, guard, case_ref) in outcomes {
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    Self::choice_id(frame, node_ref),
+                    Self::selection_id(frame, node_ref),
                     outcome,
                     guard,
                 ) else {
@@ -624,7 +631,7 @@ impl PathEvaluator<'_> {
         for selected in self.eval_node(frame, selector_ref, state)? {
             let selector = as_bits(&selected.value, "one_hot_sel selector")?;
             if let Some(concrete) = concrete_bits(self.arena, selector) {
-                self.concrete_choices += 1;
+                self.concrete_selections += 1;
                 let mask = (0..cases.len())
                     .map(|index| {
                         index < concrete.get_bit_count() && concrete.get_bit(index).unwrap()
@@ -635,10 +642,10 @@ impl PathEvaluator<'_> {
                     .zip(&mask)
                     .filter_map(|(case_ref, selected)| selected.then_some(*case_ref))
                     .collect::<Vec<_>>();
-                let state = Self::record_choice(
+                let state = Self::record_selection(
                     selected.state,
-                    Self::choice_id(frame, node_ref),
-                    ChoiceOutcome::OneHotMask(mask),
+                    Self::selection_id(frame, node_ref),
+                    SelectionOutcome::OneHotMask(mask),
                 )?;
                 results.extend(self.eval_deep_or_cases(
                     frame,
@@ -652,15 +659,16 @@ impl PathEvaluator<'_> {
             let combination_count = u32::try_from(relevant)
                 .ok()
                 .and_then(|relevant| 1_usize.checked_shl(relevant));
-            let available = SYNTACTIC_PATH_SAFETY_LIMIT.saturating_sub(self.syntactic_paths);
+            let available =
+                SYNTACTIC_CANDIDATE_SAFETY_LIMIT.saturating_sub(self.syntactic_candidates);
             let count = combination_count.unwrap_or(usize::MAX).min(available);
             self.symbolic_outcomes += count;
             if combination_count.is_none_or(|total| total > available) && self.incomplete.is_none()
             {
-                let choice = Self::choice_id(frame, node_ref);
+                let selection = Self::selection_id(frame, node_ref);
                 self.incomplete = Some(IncompleteReason::ResourceLimit {
-                    limit: SYNTACTIC_PATH_SAFETY_LIMIT,
-                    choice,
+                    limit: SYNTACTIC_CANDIDATE_SAFETY_LIMIT,
+                    selection,
                 });
             }
             for mask in 0..count {
@@ -670,8 +678,8 @@ impl PathEvaluator<'_> {
                 let guard = one_hot_mask_guard(self.arena, selector, &bits[..relevant])?;
                 let Some(state) = self.branch_state(
                     selected.state.clone(),
-                    Self::choice_id(frame, node_ref),
-                    ChoiceOutcome::OneHotMask(bits.clone()),
+                    Self::selection_id(frame, node_ref),
+                    SelectionOutcome::OneHotMask(bits.clone()),
                     guard,
                 ) else {
                     continue;
@@ -716,7 +724,7 @@ impl PathEvaluator<'_> {
         Ok(partials)
     }
 
-    /// Evaluates a callee under a callsite-qualified dynamic choice context.
+    /// Evaluates a callee under a callsite-qualified dynamic selection context.
     fn eval_invoke(
         &mut self,
         frame: &Frame<'_>,
@@ -753,7 +761,7 @@ impl PathEvaluator<'_> {
         Ok(results)
     }
 
-    /// Finite-unrolls a loop under iteration-qualified choice contexts.
+    /// Finite-unrolls a loop under iteration-qualified selection contexts.
     fn eval_counted_for(
         &mut self,
         frame: &Frame<'_>,
@@ -840,45 +848,45 @@ impl PathEvaluator<'_> {
     fn branch_state(
         &mut self,
         mut state: State,
-        choice: ChoiceId,
-        outcome: ChoiceOutcome,
+        selection: SelectionId,
+        outcome: SelectionOutcome,
         guard: ExprId,
     ) -> Option<State> {
-        if self.syntactic_paths >= SYNTACTIC_PATH_SAFETY_LIMIT {
+        if self.syntactic_candidates >= SYNTACTIC_CANDIDATE_SAFETY_LIMIT {
             if self.incomplete.is_none() {
                 self.incomplete = Some(IncompleteReason::ResourceLimit {
-                    limit: SYNTACTIC_PATH_SAFETY_LIMIT,
-                    choice,
+                    limit: SYNTACTIC_CANDIDATE_SAFETY_LIMIT,
+                    selection,
                 });
             }
             return None;
         }
-        if state.trace.insert(choice, outcome).is_some() {
+        if state.trace.insert(selection, outcome).is_some() {
             return None;
         }
-        state.condition = self.arena.bool_and([state.condition, guard]);
-        if self.arena.bool_value(state.condition) == Some(false) {
+        state.guard = self.arena.bool_and([state.guard, guard]);
+        if self.arena.bool_value(state.guard) == Some(false) {
             return None;
         }
-        self.syntactic_paths = self.syntactic_paths.saturating_add(1);
+        self.syntactic_candidates = self.syntactic_candidates.saturating_add(1);
         Some(state)
     }
 
-    fn record_choice(
+    fn record_selection(
         mut state: State,
-        choice: ChoiceId,
-        outcome: ChoiceOutcome,
+        selection: SelectionId,
+        outcome: SelectionOutcome,
     ) -> Result<State, XlsynthError> {
-        if state.trace.insert(choice.clone(), outcome).is_some() {
+        if state.trace.insert(selection.clone(), outcome).is_some() {
             return Err(symex_error(format!(
-                "choice {choice:?} was evaluated more than once in one path"
+                "selection {selection:?} was evaluated more than once in one candidate"
             )));
         }
         Ok(state)
     }
 
-    fn choice_id(frame: &Frame<'_>, node_ref: NodeRef) -> ChoiceId {
-        ChoiceId {
+    fn selection_id(frame: &Frame<'_>, node_ref: NodeRef) -> SelectionId {
+        SelectionId {
             function: frame.function.name.clone(),
             node_id: frame.function.get_node(node_ref).text_id,
             invocation: frame.invocation.clone(),
@@ -941,13 +949,13 @@ fn symbolic_sel_outcomes(
     selector: &BitsValue,
     cases: &[NodeRef],
     default: Option<NodeRef>,
-) -> Result<Vec<(ChoiceOutcome, ExprId, NodeRef)>, XlsynthError> {
+) -> Result<Vec<(SelectionOutcome, ExprId, NodeRef)>, XlsynthError> {
     let mut equalities = Vec::with_capacity(cases.len());
     let mut outcomes = Vec::with_capacity(cases.len() + 1);
     for (index, case_ref) in cases.iter().copied().enumerate() {
         let guard = equality_guard(arena, selector, index)?;
         equalities.push(guard);
-        outcomes.push((ChoiceOutcome::Case(index), guard, case_ref));
+        outcomes.push((SelectionOutcome::Case(index), guard, case_ref));
     }
     let fallback_guard = if equalities.is_empty() {
         arena.bool_const(true)
@@ -960,7 +968,7 @@ fn symbolic_sel_outcomes(
             .last()
             .ok_or_else(|| symex_error("sel has no cases"))?,
     );
-    outcomes.push((ChoiceOutcome::Default, fallback_guard, fallback_value));
+    outcomes.push((SelectionOutcome::Default, fallback_guard, fallback_value));
     Ok(outcomes)
 }
 
@@ -969,7 +977,7 @@ fn symbolic_priority_outcomes(
     selector: &BitsValue,
     cases: &[NodeRef],
     default: NodeRef,
-) -> Result<Vec<(ChoiceOutcome, ExprId, NodeRef)>, XlsynthError> {
+) -> Result<Vec<(SelectionOutcome, ExprId, NodeRef)>, XlsynthError> {
     let relevant = selector.bit_count.min(cases.len());
     let mut prior_clear = arena.bool_const(true);
     let mut outcomes = Vec::with_capacity(relevant + 1);
@@ -977,11 +985,11 @@ fn symbolic_priority_outcomes(
         let bit = arena.extract(bits_expr(selector)?, index, 1);
         let set = arena.bit_is_one(bit);
         let guard = arena.bool_and([prior_clear, set]);
-        outcomes.push((ChoiceOutcome::Case(index), guard, case_ref));
+        outcomes.push((SelectionOutcome::Case(index), guard, case_ref));
         let clear = arena.bool_not(set);
         prior_clear = arena.bool_and([prior_clear, clear]);
     }
-    outcomes.push((ChoiceOutcome::Default, prior_clear, default));
+    outcomes.push((SelectionOutcome::Default, prior_clear, default));
     Ok(outcomes)
 }
 
@@ -1042,7 +1050,7 @@ fn build_witness(
     inputs: Option<&[EvaluationInput]>,
     parameters: &[SymbolicParameter],
     model: &BTreeMap<String, IrBits>,
-) -> Result<PathWitness, XlsynthError> {
+) -> Result<Witness, XlsynthError> {
     let values = function
         .params
         .iter()
@@ -1068,7 +1076,7 @@ fn build_witness(
             Ok((parameter.clone(), IrValue::from_bits(bits)))
         })
         .collect::<Result<_, XlsynthError>>()?;
-    Ok(PathWitness {
+    Ok(Witness {
         inputs: values,
         symbolic_leaves,
     })
@@ -1154,11 +1162,11 @@ top fn nested(x: bits[1], y: bits[1], a: bits[8], b: bits[8], c: bits[8]) -> bit
         let result =
             enumerate_package_text(ir, "nested", None, &EnumerationOptions::default()).unwrap();
         assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-        assert_eq!(result.paths.len(), 3);
+        assert_eq!(result.results.len(), 3);
         let mut trace_lengths = result
-            .paths
+            .results
             .iter()
-            .map(|path| path.trace.len())
+            .map(|guarded| guarded.trace.len())
             .collect::<Vec<_>>();
         trace_lengths.sort_unstable();
         assert_eq!(trace_lengths, vec![1, 2, 2]);

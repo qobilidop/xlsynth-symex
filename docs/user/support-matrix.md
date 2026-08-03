@@ -84,7 +84,7 @@ Pinned `xlsynth-crate` revision:
 | `dynamic_bit_slice` | Merged data selection | `slicing_update_and_extension_operations_match_xls` |
 | `bit_slice_update` | Merged data selection, including oversized starts | `slicing_update_and_extension_operations_match_xls` |
 
-### Selection and path enumeration
+### Selection enumeration
 
 | Operation | Semantics and limitations | Executable coverage |
 |---|---|---|
@@ -107,8 +107,8 @@ Pinned `xlsynth-crate` revision:
 
 | Operation | Semantics and limitations | Executable coverage |
 |---|---|---|
-| `invoke` | Demand evaluation with callsite-qualified choice identities | `callsites_and_loop_iterations_have_distinct_choice_identities` |
-| `counted_for` | Finite unrolling with iteration-qualified choice identities | `callsites_and_loop_iterations_have_distinct_choice_identities` |
+| `invoke` | Demand evaluation with callsite-qualified selection identities | `callsites_and_loop_iterations_have_distinct_selection_identities` |
+| `counted_for` | Finite unrolling with iteration-qualified selection identities | `callsites_and_loop_iterations_have_distinct_selection_identities` |
 
 ## Excluded operations
 

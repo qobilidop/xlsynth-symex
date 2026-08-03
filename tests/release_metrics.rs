@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reproducible bounded-path performance smoke test for the v1 release.
+//! Reproducible bounded-selection performance smoke test for the v1 release.
 
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,7 @@ use xlsynth::IrPackage;
 use xlsynth_symex::{EnumerationCompleteness, enumerate_package};
 
 #[test]
-fn sixty_four_path_one_hot_stays_within_the_release_ceiling() {
+fn sixty_four_result_one_hot_stays_within_the_release_ceiling() {
     let ir = r#"package release_metrics
 
 top fn one_hot_64(
@@ -29,18 +29,18 @@ top fn one_hot_64(
     let elapsed = started.elapsed();
 
     assert_eq!(result.completeness, EnumerationCompleteness::Complete);
-    assert_eq!(result.paths.len(), 64);
+    assert_eq!(result.results.len(), 64);
     assert_eq!(result.statistics.symbolic_outcomes, 64);
     assert_eq!(result.statistics.solver_queries, 64);
     assert_eq!(result.statistics.infeasible_candidates, 0);
     assert!(
         elapsed <= Duration::from_secs(30),
-        "64-path enumeration took {elapsed:?}, exceeding the v1 smoke-test ceiling"
+        "64-result enumeration took {elapsed:?}, exceeding the v1 smoke-test ceiling"
     );
 
     eprintln!(
-        "v1_path_stress paths={} elapsed_ms={} construction_ms={} solver_ms={} expression_nodes={} evaluated_nodes={} cache_hits={}",
-        result.paths.len(),
+        "v1_selection_stress results={} elapsed_ms={} construction_ms={} solver_ms={} expression_nodes={} evaluated_nodes={} cache_hits={}",
+        result.results.len(),
         elapsed.as_millis(),
         result.statistics.construction_time.as_millis(),
         result.statistics.solver_time.as_millis(),

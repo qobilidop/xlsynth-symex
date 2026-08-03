@@ -1,13 +1,13 @@
 # xlsynth-symex
 
-Symbolic evaluation and exhaustive path generation for finite, pure
+Symbolic evaluation and exhaustive selection enumeration for finite, pure
 [XLS](https://github.com/google/xls) functions in Rust, built around the
 [xlsynth](https://github.com/xlsynth/xlsynth-crate) ecosystem.
 
 ```text
 pure XLS function + concrete/symbolic inputs
-    -> every feasible canonical path
-       + condition + result + selection trace + concrete witness
+    -> complete selection partition
+       + canonical trace + guard + residual result + concrete witness
 ```
 
 The library supports bits, tuples, fixed-size arrays, pure calls, and bounded
@@ -20,8 +20,8 @@ Run the complete example in the checked-in development environment:
 ./dev.sh cargo run --example enumerate
 ```
 
-Always inspect `EnumerationResult::completeness` before treating returned paths
-as full coverage.
+Always inspect `EnumerationResult::completeness` before treating returned
+guarded results as full coverage.
 
 ## Documentation
 
@@ -31,7 +31,7 @@ branch. Its source is organized by audience below.
 
 For library users:
 
-- [User guide](docs/user/guide.md): usage, path semantics, completeness,
+- [User guide](docs/user/guide.md): usage, selection semantics, completeness,
   constraints, limitations, and performance characteristics.
 - [Support matrix](docs/user/support-matrix.md): the checked operation inventory
   for the pinned XLS toolchain.

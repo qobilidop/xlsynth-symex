@@ -24,5 +24,5 @@ Tests do not access the network. Both optimized and unoptimized IR are checked,
 and failures identify the corpus entry, optimization mode, and concrete sample.
 The four canonical semantic validation modes are curated-vector differential
 testing, differential fuzz testing, symbolic equivalence checking, and
-path-witness replay. A blocked status is an explicit capability boundary, not a
+selection-witness replay. A blocked status is an explicit capability boundary, not a
 pass or a skipped test.

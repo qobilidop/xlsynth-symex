@@ -17,7 +17,7 @@ formal or test-generation workflows:
 
 ```text
 xlsynth / xlsynth-pir
-    -> typed symbolic evaluation and canonical path enumeration
+    -> typed symbolic evaluation and canonical selection enumeration
        -> witnesses, coverage tests, equivalence checks, downstream executors
 ```
 
@@ -29,7 +29,7 @@ It complements rather than replaces existing components:
   and
 - `xlsynth-prover` provides formal workflows and solver integrations, while
   this component owns mixed concrete/symbolic evaluation, residual XLS values,
-  canonical path semantics, and one witness per feasible path.
+  canonical selection semantics, and one witness per feasible guarded result.
 
 The pure-function boundary is intentional. Procs, hardware state, timing, and
 whole-machine execution should not enter this crate merely to support a
@@ -40,7 +40,7 @@ downstream use case.
 - Reusable behavior is a library with typed public APIs; the example is a thin
   consumer.
 - Library code does not print, and solver diagnostics become results or errors.
-- Observable maps, traces, paths, and serialization are deterministic.
+- Observable maps, traces, guarded results, and serialization are deterministic.
 - Arbitrary-width `IrBits` and recursively structured `IrValue` data cross the
   public boundary.
 - Maintained source files carry Apache-2.0 SPDX identifiers.
@@ -78,7 +78,7 @@ The main integration choices should be explicit rather than hidden in a
 mechanical code move:
 
 1. Select the destination crate or module and public ownership boundary.
-2. Decide whether the expression DAG and path model are public reusable types
+2. Decide whether the expression DAG and selection model are public reusable types
    or implementation details of one evaluator crate.
 3. Decide whether the solver adapter remains an external Z3 process, consumes
    an injected solver interface, or reuses an upstream facility. Preserve typed
@@ -92,7 +92,7 @@ mechanical code move:
 
 1. Land any independently useful `xlsynth-pir` representation changes.
 2. Move the expression/value layer and focused semantic tests.
-3. Move path enumeration, canonical traces, constraints, and witnesses.
+3. Move selection enumeration, canonical traces, constraints, and witnesses.
 4. Replace standalone dependency and lint configuration with workspace
    equivalents.
 5. Adapt the verification suite to upstream test and CI conventions.

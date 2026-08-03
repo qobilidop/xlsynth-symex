@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Z3 process adapter and the minimal model parser used by path enumeration.
+//! Z3 process adapter and the minimal model parser used by selection enumeration.
 //!
 //! The adapter captures all process output. Solver-specific syntax remains
 //! behind this module; callers supply typed constraints through the public API.
@@ -21,10 +21,10 @@ pub(crate) enum Satisfiability {
     Indeterminate(String),
 }
 
-/// Checks one condition and returns a complete arbitrary-width input model.
+/// Checks one guard and returns a complete arbitrary-width input model.
 pub(crate) fn solve(
     parameters: &[SymbolicParameter],
-    condition: &str,
+    guard: &str,
     timeout: Duration,
 ) -> Result<Satisfiability, XlsynthError> {
     let timeout_ms = u64::try_from(timeout.as_millis())
@@ -40,7 +40,7 @@ pub(crate) fn solve(
         )
         .expect("writing to a String cannot fail");
     }
-    writeln!(query, "(assert {condition})").expect("writing to a String cannot fail");
+    writeln!(query, "(assert {guard})").expect("writing to a String cannot fail");
     query.push_str("(check-sat)\n");
     query.push_str("(get-info :reason-unknown)\n");
     if !parameters.is_empty() {
