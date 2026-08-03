@@ -25,15 +25,18 @@ as full coverage.
 
 ## Documentation
 
+The [documentation site](https://qobilidop.github.io/xlsynth-symex/) combines
+the narrative guides with API documentation generated from the current `main`
+branch. Its source is organized by audience below.
+
 For library users:
 
 - [User guide](docs/user/guide.md): usage, path semantics, completeness,
   constraints, limitations, and performance characteristics.
 - [Support matrix](docs/user/support-matrix.md): the checked operation inventory
   for the pinned XLS toolchain.
-- [Rust API documentation](https://docs.rs/xlsynth-symex): item-level API
-  reference once the crate is published. Until then, run
-  `./dev.sh cargo doc --no-deps --open`.
+- [API reference](https://qobilidop.github.io/xlsynth-symex/api/xlsynth_symex/):
+  item-level documentation for the current `main` branch.
 
 For contributors and reviewers:
 
@@ -44,3 +47,6 @@ For contributors and reviewers:
   coverage, and release evidence.
 - [Upstreaming](docs/developer/upstreaming.md): `xlsynth-crate` fit and
   integration considerations.
+
+Build the complete site locally with `./dev.sh ./scripts/check-docs.sh`; output
+is written to `target/site`.

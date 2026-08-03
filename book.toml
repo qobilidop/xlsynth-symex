@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+
+[book]
+title = "xlsynth-symex"
+description = "Symbolic evaluation and exhaustive path generation for pure XLS functions"
+language = "en"
+src = "docs"
+
+[rust]
+edition = "2024"
+
+[build]
+build-dir = "target/site"
+create-missing = false
+
+[output.html]
+site-url = "/xlsynth-symex/"
+git-repository-url = "https://github.com/qobilidop/xlsynth-symex"
+edit-url-template = "https://github.com/qobilidop/xlsynth-symex/edit/main/docs/{path}"
+no-section-label = true
+
+[output.html.search]
+enable = true

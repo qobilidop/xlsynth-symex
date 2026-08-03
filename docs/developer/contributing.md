@@ -28,6 +28,18 @@ shorter loops include:
 ./dev.sh cargo test --test path_enumeration
 ```
 
+Build the complete documentation site independently with:
+
+```text
+./dev.sh ./scripts/check-docs.sh
+```
+
+The command validates repository-relative Markdown links, builds mdBook and
+rustdoc with their checked configuration, and writes the same `target/site`
+tree deployed by CI. Open `target/site/index.html` for a local preview. mdBook
+is version-pinned in the development image; do not install an unrelated host
+copy for repository checks.
+
 The default image is `ghcr.io/qobilidop/xlsynth-symex/dev:main`; Docker pulls it
 automatically when it is absent. To test a Dockerfile change, build an image
 directly and select it through the wrapper's single configuration variable:
@@ -109,10 +121,10 @@ weaken full-coverage semantics.
 ## Changing the curated corpus
 
 Follow the directory-local
-[`tests/corpus/curated/README.md`](../../tests/corpus/curated/README.md). Fixtures
-retain upstream notices and provenance, tests remain offline, and manifests pin
-the source revision, function, features, stable seeds, and budgets. Both
-optimized and unoptimized IR forms are tracked independently.
+[`tests/corpus/curated/README.md`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/corpus/curated/README.md).
+Fixtures retain upstream notices and provenance, tests remain offline, and
+manifests pin the source revision, function, features, stable seeds, and
+budgets. Both optimized and unoptimized IR forms are tracked independently.
 
 External reference-translator failures are recorded as named blockers, not as
 passes or candidate defects. Retain independent interpreter differential tests
@@ -132,6 +144,12 @@ The README is a landing page, not a status report. Temporary implementation
 state belongs in issues and pull requests. Once a decision is reflected in its
 owning document, rely on Git history rather than adding permanent working notes
 or an archive directory.
+
+`docs/SUMMARY.md` owns the published sidebar and must include every narrative
+chapter. Files linked from published chapters must either live under `docs/` or
+use an explicit web URL; repository-relative links that escape the mdBook source
+tree would be broken on GitHub Pages. CI publishes the combined mdBook and
+rustdoc site only after the complete check succeeds on `main`.
 
 After moving or deleting documentation, search the whole repository for stale
 links and run the complete project check; tests consume the support and

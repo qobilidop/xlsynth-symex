@@ -5,6 +5,7 @@ FROM ubuntu:24.04
 
 ARG TARGETARCH
 ARG RUST_TOOLCHAIN=nightly-2026-08-02
+ARG MDBOOK_VERSION=0.5.4
 
 LABEL org.opencontainers.image.source="https://github.com/qobilidop/xlsynth-symex"
 
@@ -34,6 +35,10 @@ RUN case "${TARGETARCH}" in \
     && rustup component add clippy rustfmt --toolchain "${RUST_TOOLCHAIN}" \
     && rm /tmp/rustup-init \
     && chmod -R a+rX /opt/cargo /opt/rustup
+
+RUN cargo install mdbook \
+        --version "=${MDBOOK_VERSION}" \
+        --locked
 
 WORKDIR /workspace/xlsynth-symex
 

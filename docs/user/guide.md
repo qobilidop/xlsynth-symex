@@ -32,7 +32,8 @@ checked-in AMD64 container. It includes the required Z3 executable:
 
 The example parses an `IrPackage`, calls `enumerate_package`, checks
 `EnumerationResult::completeness`, and prints each trace and condition. The
-complete source is [`../../examples/enumerate.rs`](../../examples/enumerate.rs).
+complete source is
+[`examples/enumerate.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/examples/enumerate.rs).
 
 The enumeration entry points form three families:
 
@@ -170,7 +171,7 @@ for the measured environment and evidence, and inspect
 
 ## Getting help or contributing
 
-The Rust API documentation describes every public item. Architecture and
-contribution guidance live under [`../developer/`](../developer/), beginning
-with [`../developer/design.md`](../developer/design.md) and
+The [current API reference](https://qobilidop.github.io/xlsynth-symex/api/xlsynth_symex/)
+describes every public item. Architecture and contribution guidance begin with
+[`../developer/design.md`](../developer/design.md) and
 [`../developer/contributing.md`](../developer/contributing.md).

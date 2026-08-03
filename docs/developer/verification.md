@@ -79,14 +79,14 @@ The evidence is layered and checked into the repository:
 
 | Evidence | Source |
 |---|---|
-| Operation and type coverage | [`../user/support-matrix.md`](../user/support-matrix.md) and [`../../tests/support_matrix.rs`](../../tests/support_matrix.rs) |
-| Primitive and structural semantics | [`../../tests/operation_semantics.rs`](../../tests/operation_semantics.rs) |
-| Generated value comparison | [`../../tests/differential.rs`](../../tests/differential.rs) |
-| Choice and mixed-input semantics | [`../../tests/path_enumeration.rs`](../../tests/path_enumeration.rs) |
-| Coverage, trace sets, and mutations | [`../../tests/enumeration_completeness.rs`](../../tests/enumeration_completeness.rs) |
-| Pinned upstream corpus | [`../../tests/curated_corpus.rs`](../../tests/curated_corpus.rs) and [`../../tests/corpus/curated/validation.tsv`](../../tests/corpus/curated/validation.tsv) |
-| Bounded performance guard | [`../../tests/release_metrics.rs`](../../tests/release_metrics.rs) |
-| Repository and license rules | [`../../tests/repository_conventions.rs`](../../tests/repository_conventions.rs) |
+| Operation and type coverage | [`../user/support-matrix.md`](../user/support-matrix.md) and [`tests/support_matrix.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/support_matrix.rs) |
+| Primitive and structural semantics | [`tests/operation_semantics.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/operation_semantics.rs) |
+| Generated value comparison | [`tests/differential.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/differential.rs) |
+| Choice and mixed-input semantics | [`tests/path_enumeration.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/path_enumeration.rs) |
+| Coverage, trace sets, and mutations | [`tests/enumeration_completeness.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/enumeration_completeness.rs) |
+| Pinned upstream corpus | [`tests/curated_corpus.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/curated_corpus.rs) and [`validation.tsv`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/corpus/curated/validation.tsv) |
+| Bounded performance guard | [`tests/release_metrics.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/release_metrics.rs) |
+| Repository and license rules | [`tests/repository_conventions.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/repository_conventions.rs) |
 
 The support matrix currently contains 65 supported pure-value operations and 8
 explicit exclusions. Every supported row names an executable test target, and

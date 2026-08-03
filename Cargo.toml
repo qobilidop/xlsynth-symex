@@ -8,7 +8,7 @@ license = "Apache-2.0"
 description = "Symbolic evaluation and exhaustive path generation for pure XLS functions"
 repository = "https://github.com/qobilidop/xlsynth-symex"
 documentation = "https://docs.rs/xlsynth-symex"
-homepage = "https://github.com/qobilidop/xlsynth-symex"
+homepage = "https://qobilidop.github.io/xlsynth-symex/"
 readme = "README.md"
 
 [dependencies]
