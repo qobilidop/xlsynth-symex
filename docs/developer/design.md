@@ -166,6 +166,44 @@ outcome, demand-driven evaluation can omit the inactive value cone without
 changing the returned value. The mechanics are described in
 [`Demand-driven evaluation`](#demand-driven-evaluation).
 
+## Academic context
+
+There is no single established research area named “symbolic execution of
+dataflow graphs.” The closest work spans hardware symbolic simulation,
+symbolic analysis of block-diagram languages, constraint-based testing of
+synchronous dataflow programs, and symbolic execution of RTL. These uses of
+“dataflow” should not be confused with compiler data-flow analysis over a
+control-flow graph or symbolic scheduling of token-based actor networks.
+
+| Research lineage | Relevant idea | Relationship to this design |
+|---|---|---|
+| Bryant, [*Symbolic Simulation—Techniques and Applications*](https://www.cs.cmu.edu/~bryant/pubdir/dac90.pdf) (1990) | Propagate symbolic inputs through circuit operations and retain conditional behavior in merged expressions. | This is the direct precedent for merged evaluation of an XLS function; it does not enumerate selection outcomes. |
+| Kanade et al., [*Generating and Analyzing Symbolic Traces of Simulink/Stateflow Models*](https://theory.stanford.edu/~srirams/papers/cav2009.pdf) (2009) | Compose block-level symbolic transformers consisting of a guard and an expression; conditional blocks contribute the choice observed in a concrete simulation. | A transformer resembles one guarded result, but the analysis generalizes one concrete, temporal trace rather than enumerating every feasible selection outcome. |
+| Li et al., [*SEDGE: Symbolic Example Data Generation for Dataflow Programs*](https://c.csallner.org/papers/li13sedge.pdf) (2013) | Partition the behavior of operators such as filters into equivalence classes, derive symbolic constraints, and solve for representative input data. | This directly applies symbolic execution to a dataflow DAG and is close to outcome-directed test generation, but tuples flow through and may terminate at operators; XLS operands are eager values. |
+| Marre and Blanc, [*Test Selection Strategies for Lustre Descriptions in GATeL*](https://doi.org/10.1016/j.entcs.2004.12.010) (2005) | Translate synchronous dataflow equations into guarded constraints and split the input domain by operator sub-cases, such as the two outcomes of `if`. | Operator sub-cases and domain splitting closely resemble selection outcomes and guards, but Lustre adds temporal cycles and state. |
+| Ryan and Sturton, [*Sylvia: Countering the Path Explosion Problem in the Symbolic Execution of Hardware Designs*](https://par.nsf.gov/servlets/purl/10529227) (2023) | Split at RTL control statements, explore independent blocks separately, and compose their fragments with SMT. | This addresses the cross-product created by parallel hardware choices, but its paths are paths through RTL control flow rather than outcomes of mux operations in a pure dataflow graph. |
+
+This literature also explains why this crate exposes two views. Merged
+evaluation follows the hardware symbolic-simulation tradition: choices remain
+inside conditional values. Selection enumeration instead partitions the input
+domain into guarded operator outcomes, drawing on dataflow test generation and
+symbolic execution. The former risks expression growth; the latter risks an
+exponential number of results.
+
+Bryant, Beatty, and Seger's
+[*Formal Hardware Verification by Symbolic Ternary Trajectory Evaluation*](https://www.cs.cmu.edu/~bryant/pubdir/dac91a.pdf)
+(1991) is adjacent hardware prior art, but its *trajectory* is a bounded
+temporal sequence of circuit states, not a selection-outcome assignment within
+one pure function evaluation.
+
+The surveyed work does not supply a standard term for the exact combination
+used here: complete feasible outcome assignments at mux-like value operations,
+with structurally inactive nested operations omitted. Consequently,
+`selection site`, `selection outcome`, `guard`, `guarded result`, and
+`canonical selection trace` are defined project terms. They describe the
+semantics precisely without claiming that a trace is a control-flow or
+data-dependency path, or that the combination is academically novel.
+
 ## System boundary
 
 The implementation deliberately composes existing xlsynth layers:
