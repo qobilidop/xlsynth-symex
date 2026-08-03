@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-const MATRIX: &str = include_str!("../docs/support-matrix.tsv");
+const MATRIX: &str = include_str!("../docs/user/support-matrix.tsv");
 const OPERATION_TESTS: &str = include_str!("operation_semantics.rs");
 const PATH_TESTS: &str = include_str!("path_enumeration.rs");
 

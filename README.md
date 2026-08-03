@@ -1,66 +1,46 @@
 # xlsynth-symex
 
-Symbolic evaluation and exhaustive path generation for pure
+Symbolic evaluation and exhaustive path generation for finite, pure
 [XLS](https://github.com/google/xls) functions in Rust, built around the
 [xlsynth](https://github.com/xlsynth/xlsynth-crate) ecosystem.
 
 ```text
-pure XLS function + concrete/symbolic arguments
+pure XLS function + concrete/symbolic inputs
     -> every feasible canonical path
-       + constraints + symbolic results + selection traces
+       + condition + result + selection trace + concrete witness
 ```
 
-The library is scoped to finite pure functions over bits, tuples, and fixed-size
-arrays. Stateful XLS constructs, hardware timing, unbounded memory, and
-whole-machine symbolic execution are outside the project boundary.
+The library supports bits, tuples, fixed-size arrays, pure calls, and bounded
+iteration. Stateful XLS constructs, hardware timing, unbounded memory, and
+whole-machine symbolic execution are outside its scope.
 
-## Use
-
-Parse an XLS package with `xlsynth`, then call `enumerate_package` for
-all-symbolic inputs or one of the mixed-input entry points. Always inspect
-`EnumerationResult::completeness` before treating the returned paths as full
-coverage.
+Run the complete example in the checked-in development environment:
 
 ```text
 ./dev.sh cargo run --example enumerate
 ```
 
-Each feasible path contains its condition, residual symbolic value, canonical
-selection trace, and a solver-derived concrete XLS witness. The
-[`examples/enumerate.rs`](examples/enumerate.rs) program is a minimal complete
-example.
-
-## Development
-
-Run project commands in the checked-in development container:
-
-```text
-./dev.sh ./scripts/check.sh
-```
-
-The complete check runs formatting, Clippy, tests, and rustdoc. Individual
-commands use the same wrapper when a shorter feedback loop is useful:
-
-```text
-./dev.sh cargo test --workspace
-./dev.sh cargo fmt --all -- --check
-./dev.sh cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Run `./dev.sh` without a command for an interactive shell. The wrapper uses the
-checked-in development environment shared with CI.
+Always inspect `EnumerationResult::completeness` before treating returned paths
+as full coverage.
 
 ## Documentation
 
-- [V1 design](docs/design.md): the normative end state and project boundary.
-- [Verification](docs/verification.md): the evidence required to call v1 done.
-- [Status](docs/status.md): the current implementation and validation snapshot.
-- [Roadmap](docs/roadmap.md): the v1 implementation record and optional work
-  beyond it.
-- [Support matrix](docs/support-matrix.tsv): the pinned operation inventory and
-  executable coverage targets.
-- [Research](docs/research.md): prior art and evaluation sources.
-- [Upstreaming readiness](docs/upstreaming.md): adopted conventions and the
-  eventual workspace-integration boundary.
-- [Historical notes](docs/notes/): superseded design discussion and prototype
-  records.
+For library users:
+
+- [User guide](docs/user/guide.md): usage, path semantics, completeness,
+  constraints, limitations, and performance characteristics.
+- [Support matrix](docs/user/support-matrix.tsv): the checked operation inventory
+  for the pinned XLS toolchain.
+- [Rust API documentation](https://docs.rs/xlsynth-symex): item-level API
+  reference once the crate is published. Until then, run
+  `./dev.sh cargo doc --no-deps --open`.
+
+For contributors and reviewers:
+
+- [Design](docs/developer/design.md): architecture, invariants, and rationale.
+- [Contributing](docs/developer/contributing.md): development workflow and
+  change requirements.
+- [Verification](docs/developer/verification.md): correctness, completeness,
+  coverage, and release evidence.
+- [Upstreaming](docs/developer/upstreaming.md): `xlsynth-crate` fit and
+  integration considerations.

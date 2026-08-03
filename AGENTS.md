@@ -1,12 +1,13 @@
 # Project guidance
 
-- Treat `docs/design.md` as the authoritative v1 specification. Keep changing
-  implementation facts in `docs/status.md`, the current-to-v1 work sequence in
-  `docs/roadmap.md`, and release evidence requirements in
-  `docs/verification.md`. Use `docs/research.md` for prior art and
-  `docs/notes/` for historical material.
+- Treat `docs/user/guide.md` as the source of truth for public behavior and
+  `docs/developer/design.md` as the source of truth for internal architecture.
+  Keep validation claims in `docs/developer/verification.md` and upstream
+  integration considerations in `docs/developer/upstreaming.md`. Historical
+  reasoning belongs in Git and pull requests, not permanent working-note files.
 - Keep this repository scoped to symbolic evaluation of pure XLS functions;
   whole-processor symbolic execution belongs downstream.
+- Run repository development and verification commands through `./dev.sh`.
 - An AI agent that materially co-authors a commit should add a `Co-Authored-By`
   trailer identifying itself and the model actually used. Each agent must use
   its own identity and valid attribution address; never attribute another
