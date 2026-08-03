@@ -1,174 +1,84 @@
-# xlsynth-symex design
+# xlsynth-symex v1 design
 
-Status: Initial design; no compatibility promises yet.
+This document is the authoritative specification of the v1 end state. It
+describes what the repository means to build, independent of the current
+implementation sequence.
 
-This document is the authoritative, living description of the intended design.
-Historical discussion and alternatives belong in `docs/notes/` during the
-initial prototyping phase; references and prior art belong in
-[`research.md`](research.md).
+In this repository, **v1 means done**: the core symbolic-evaluation and path
+enumeration promise is complete. After v1, the next project-level question is
+whether and how to upstream the work, not which essential capability is still
+missing.
 
-## Development environment
-
-All project development commands should run through `./dev.sh` in the
-Ubuntu-based development container. The container uses the versioned Ubuntu
-24.04 base image and follows `xlsynth-crate` conventions where applicable:
-nightly Rust, rustfmt, Clippy, LLVM/libc++, protobuf, and Z3 tooling. The
-nightly toolchain is date-pinned in `rust-toolchain.toml`.
-
-The same Dockerfile is used locally and by CI. GitHub Actions validates the
-image for pull requests and publishes `main` and immutable commit-SHA tags to
-GHCR after changes land on `main`. The image currently targets `linux/amd64`
-because `xlsynth-sys` does not provide Linux ARM64 artifacts; Apple Silicon
-hosts use Docker's x86 emulation. The wrapper prefers the published image and
-falls back to building it locally, so the checked-in Dockerfile remains the
-bootstrap path.
+For changing implementation facts, see [`status.md`](status.md). For the work
+sequence, see [`roadmap.md`](roadmap.md). For the evidence required to call v1
+complete, see [`verification.md`](verification.md). Prior art belongs in
+[`research.md`](research.md), and historical discussion belongs in
+[`notes/`](notes/).
 
 ## Purpose
 
-`xlsynth-symex` symbolically evaluates pure XLS IR functions. Given a function
+`xlsynth-symex` symbolically evaluates finite, pure XLS IR functions over a
+mixture of concrete and symbolic arguments. Its primary value is exhaustive
+test generation over the function's IR-level control choices:
 
-\[
-f : (T_1, \ldots, T_n) \rightarrow T_r,
-\]
+```text
+pure XLS function + concrete/symbolic arguments
+    -> every feasible canonical path
+       + path condition
+       + symbolic result
+       + selection trace
+       + solver-derived concrete witness
+```
 
-it evaluates the function over a mixture of concrete and symbolic arguments to
-produce symbolic results, constraints, and, when requested, enumerated paths.
-
-A motivating downstream application models the operational semantics of one
-instruction as:
+The motivating downstream application models one instruction as:
 
 \[
 f(\mathit{instruction}, \mathit{state}) \rightarrow \mathit{new\_state}.
 \]
 
-When the instruction is concrete and the state is symbolic, `xlsynth-symex`
-should residualize instruction-dependent control and enumerate only paths that
-depend on symbolic state. A separate project can compose these per-instruction
-transitions into a whole-machine executor. Instruction dispatch and
-whole-machine execution are not responsibilities of this library.
+With a concrete instruction and symbolic state, the evaluator resolves
+instruction-dependent choices without generating irrelevant paths and
+enumerates every feasible path that still depends on symbolic state. A separate
+project may compose these per-instruction transitions into a whole-machine
+executor.
 
 Although the project uses the familiar term *symbolic execution*, XLS functions
 are dataflow graphs rather than imperative control-flow programs. *Symbolic
-evaluation* is often the more precise description.
+evaluation* is the more precise description of the core mechanism.
 
-## Scope
+## V1 contract
 
-The initial target is the pure function subset of XLS IR:
+### Supported semantic domain
 
-- bits of arbitrary fixed width;
-- tuples;
-- fixed-size arrays;
-- finite, terminating dataflow computations; and
-- calls and finite iteration after their semantics are supported by the chosen
-  IR layer.
+V1 supports finite, terminating, value-producing XLS functions whose values are
+formed recursively from:
 
-The initial design excludes:
+- bits of arbitrary fixed width, including zero-width bits where XLS permits
+  them;
+- tuples; and
+- fixed-size arrays, including nested arrays and structured elements.
 
-- procs and blocks;
-- channels and tokens;
-- clocks, schedules, and pipeline timing;
-- persistent state outside explicit function values;
-- a general or unbounded memory model;
-- instruction fetch, dispatch, or sequence exploration;
-- ISA-specific conventions such as program counters, traps, and privilege; and
-- reconstruction of DSLX source paths from optimized IR.
+The supported computation includes ordinary pure calls and finite iteration.
+DSLX parametrics and source-level types matter only through the XLS IR to which
+they lower.
 
-An XLS array is an ordinary finite value. It does not imply an SMT or processor
-memory model.
+A checked-in operation-and-type support matrix pins the XLS/xlsynth version and
+lists every function-level IR operation in that pinned toolchain, together with
+its representation status in the selected Rust IR layer. Every entry is
+classified as:
 
-## System boundary
+- supported and covered by executable semantic tests;
+- outside the pure value domain for a stated reason; or
+- a pre-v1 implementation or IR-layer gap.
 
-The expected initial stack is:
+At v1, no in-scope pure value entry remains a gap. If the selected Rust IR layer
+cannot represent such an operation, that layer is extended or replaced rather
+than silently narrowing the semantic claim. The v1 design does not exclude a
+finite value operation merely because it was absent from an earlier prototype.
 
-```text
-DSLX or textual XLS IR
-          |
-          | xlsynth: parse, typecheck, lower, optimize, concrete execution
-          v
-      textual XLS IR
-          |
-          | xlsynth-pir: native Rust representation and traversal
-          v
-  xlsynth-symex evaluator
-          |
-          +-- backend-neutral symbolic expression DAG
-          +-- path conditions and selection traces
-          +-- solver adapter(s)
-          +-- model conversion to XLS values
-```
+### Mixed concrete and symbolic evaluation
 
-`xlsynth` remains the authoritative boundary for compilation and concrete
-replay. `xlsynth-pir` provides native Rust node access and is now the evaluator's
-IR traversal layer. It is a partial function-focused IR, so its operation and
-type coverage must still be measured rather than assumed.
-
-The symbolic value and evaluator layers should not expose processor or
-instruction concepts. A state transition is simply one possible XLS function.
-
-## Current native evaluator slice
-
-The evaluator parses XLS IR with `xlsynth-pir` and constructs its own typed
-SMT-LIB bit-vector expressions. The current slice returns one merged result
-whose path condition is `true`. It supports bits, tuple, and fixed-size array
-parameters and results. Structured values are represented recursively and bits
-leaves become independent SMT parameters. The operation slice includes core
-arithmetic and Boolean operations, reductions, comparisons, extensions, static
-and dynamic slices, merged selects, structural tuple construction and indexing,
-array construction, symbolic one-dimensional indexing and update, `one_hot`,
-`encode`, and recursive calls to pure functions in the package. Zero-width bits are
-carried structurally with no SMT term and disappear through operations such as
-concatenation and extension. `counted_for` loops with static trip counts are
-evaluated by repeatedly applying their pure body function to a symbolic carry.
-
-Direct SMT expression strings are an expedient initial representation; they
-make the independent validation boundary available early but do not yet provide
-structural interning or solver-independent expressions. The expression layer
-should become an interned typed DAG as operation coverage and sharing grow.
-
-Semantic validation uses bits-only generated pure functions and curated
-upstream examples. Concrete inputs are evaluated with the XLS interpreter and
-asserted against the native expression. Whole-function equivalence separately
-compares the native result with `IrFunction::to_z3_smtlib`; `UNSAT` is now a
-meaningful independent check rather than an adapter self-comparison.
-
-## Symbolic domain
-
-The first implementation should distinguish fully concrete and symbolic
-values:
-
-```rust
-enum Value {
-    Bits(BitsValue),
-    Tuple(Vec<Value>),
-    Array(Vec<Value>),
-}
-
-enum BitsValue {
-    Concrete(IrBits),
-    Symbolic(ExprId),
-}
-```
-
-Operations fold concrete operands whenever possible and otherwise construct
-symbolic expressions:
-
-```text
-Concrete(3) + Concrete(4) -> Concrete(7)
-Symbolic(x) + Concrete(4) -> Add(x, 4)
-Concrete(0) == Concrete(0) -> Concrete(true)
-```
-
-A later refinement may attach known-bit masks to symbolic bit vectors. That
-would permit a selector to resolve when only the relevant bits are known,
-without requiring the complete value to be concrete.
-
-Symbolic expressions should be backend-neutral. Solver-specific objects should
-not be the evaluator's fundamental value representation. This enables multiple
-SMT backends, expression interning and simplification, concrete substitution,
-and non-SMT analyses over the same evaluator.
-
-## Mixed concrete and symbolic evaluation
-
+The public evaluator accepts a concrete or symbolic value at every input leaf.
 For a concrete argument \(i\), evaluating \(f(i, \hat{s})\) computes the
 residual function:
 
@@ -176,89 +86,102 @@ residual function:
 f_i(\hat{s}) = f(i, \hat{s}).
 \]
 
-This is online partial evaluation. A select with a concrete selector chooses
-one operand without creating a symbolic branch or path constraint. A select
-with a symbolic selector may either remain a merged `ite` expression or split
-into paths according to policy.
+Operations fold concrete operands when possible. A concretely resolved select
+demands only its selected case, creates no symbolic fork for that choice, and
+does not visit unused case cones.
 
-Evaluation should be demand-driven and memoized. A topological evaluator would
-construct both case cones before discovering that a selector is concrete.
-Starting at the return node instead allows the evaluator to visit only the
-selected operand cone. Shared nodes are evaluated once per applicable
-environment or path.
+Evaluation is demand-driven and memoized. Starting from the return node lets a
+concrete selector prune unused dependencies before they are constructed. Shared
+demanded nodes are evaluated once per applicable environment or path. The
+pure-function restriction makes this pruning semantically safe because discarded
+operands have no side effects.
 
-The pure-function restriction makes this pruning semantically safe: discarded
-operands have no side effects. Optional ahead-of-time specialization may later
-replace frequently concrete parameters with literals, run XLS optimization,
-and cache the residual IR. Online mixed evaluation remains the fundamental
-semantics.
+### Complete enumeration
 
-## Merged and path-enumerating modes
+For the declared path policy, v1 enumerates every feasible canonical path. It
+never silently preserves an in-scope symbolic choice as a merged expression and
+reports enumeration as complete.
 
-The library should allow two related modes:
+Completion is an explicit outcome. A conceptual result is:
 
-1. **Merged symbolic evaluation** preserves symbolic selections as expressions
-   such as `ite`. It promises a symbolic result but not explicit path
-   enumeration.
-2. **Path-enumerating evaluation** splits at configured choice sites and
-   returns a condition, value, and canonical selection trace for each path.
+```text
+EnumerationResult {
+    paths: [PathResult],
+    completeness: Complete | Incomplete(reason),
+}
 
-This distinction prevents a correct, compact evaluator from being called
-incomplete merely because it deliberately merges control choices.
-
-A conceptual path result is:
-
-```rust
-struct PathResult {
-    condition: SymBool,
-    value: Value,
-    trace: SelectionTrace,
+PathResult {
+    condition,
+    value,
+    trace,
+    witness,
 }
 ```
 
-## Choice sites and split policy
+The exact Rust API may differ, but it preserves the distinction. A timeout,
+resource limit, unsupported operation, or solver failure may yield useful
+partial paths, but the outcome is incomplete and is not full path coverage.
 
-XLS IR has no control-flow graph. It evaluates dataflow eagerly and expresses
-control-like behavior with selection operations. Paths in this project are
-therefore defined relative to explicit IR choice sites and a split policy.
+For a completed enumeration:
 
-Initial policy:
+- every returned path condition is feasible;
+- the path conditions cover the input domain under the caller's constraints;
+- every trace is canonical and unique;
+- every feasible canonical trace under the declared policy is represented;
+- the piecewise union of path results equals the merged function result; and
+- every path has a concrete witness whose XLS replay agrees with its result and
+  trace.
 
-- `sel` is an exclusive choice site;
-- `priority_sel` is an exclusive choice site with guards that exclude all
-  higher-priority cases;
-- `one_hot_sel` is exclusive only when one-hotness is established; otherwise it
-  remains merged or records a selected-case bitmask without enumerating every
-  subset; and
-- dynamic array indices and bit slices remain symbolic data selection rather
-  than path splits by default.
+### Path and choice semantics
 
-The policy should eventually be configurable. A trace is tied to the exact IR
-function, optimization state, node identities, symbolic/concrete argument
-partition, demanded root, and split policy. It is not expected to be stable
-across optimization or compiler versions.
+XLS IR has no control-flow graph. It evaluates a dataflow graph eagerly and
+expresses control-like behavior through selection operations. A v1 path is
+therefore a canonical partial valuation of declared IR choice sites in the
+demanded dynamic slice. It is not an ordered sequence of executed basic blocks
+and does not claim to reconstruct DSLX source control flow.
 
-## Canonical selection traces
+The default v1 choice policy is:
 
-A selection trace is a partial valuation of choice sites induced by the
-demanded dynamic slice:
+- `sel`: enumerate every feasible selected case and default outcome;
+- `priority_sel`: enumerate every feasible priority-resolved case and default
+  outcome, with each guard excluding all higher-priority cases;
+- `one_hot_sel`: enumerate every feasible selected-case bitmask unless the
+  selector is constrained or established to be one-hot, in which case enumerate
+  the feasible one-hot outcomes; and
+- nested choices: omit a choice from the trace when an outer outcome makes it
+  structurally inactive.
+
+Dynamic array indices, dynamic bit-slice positions, shift amounts, and similar
+data selectors are not path sites under the default policy. Their semantics and
+boundary values remain subject to differential testing and data-domain
+coverage. Optional policies may expose them as additional coverage dimensions
+without changing the default meaning of a v1 path.
+
+An exhaustive mode never silently merges one of the declared choice sites to
+control path growth. It either completes the declared enumeration or reports an
+incomplete result.
+
+### Canonical selection traces
+
+A selection trace is a sparse map from choice-node identity to outcome:
 
 \[
 \tau : \mathit{ChoiceNodeId} \rightharpoonup \mathit{Outcome}.
 \]
 
-It is a map, not a temporal sequence. Node IDs may provide a stable
-serialization order within an IR artifact, but graph scheduling order has no
-semantic significance.
+It is a map, not a temporal sequence. Its identity is tied to the exact IR
+function, optimization state, node identities, concrete/symbolic input
+partition, demanded root, and path policy. It need not remain stable when any of
+those inputs change.
 
-Consider nested selection:
+For nested selections:
 
 ```text
 outer = if x { inner } else { c }
 inner = if y { a } else { b }
 ```
 
-The canonical traces are:
+the canonical traces are:
 
 ```text
 {outer: else}
@@ -266,206 +189,114 @@ The canonical traces are:
 {outer: then, inner: then}
 ```
 
-When the outer `else` case is selected, the inner choice is structurally
-inactive. Its outcome is a don't-care and must not cause redundant path splits.
-Absence from a sparse trace means inactive; a diagnostic full representation
-may use an explicit `Inactive` state.
-
-Inactive does not mean that every arbitrary completion is concretely feasible.
-It means only that the path condition and result do not observe or constrain
-that choice. The actual selector may still be determined by dependencies among
-the inputs.
+When `outer: else` is selected, `inner` is structurally inactive. Its absence
+does not claim that every arbitrary value of its selector is feasible; it says
+only that the path neither observes nor constrains that choice.
 
 Structural inactivity is distinct from semantic irrelevance. A demanded select
-whose cases happen to compute equal values is structurally active even though
-its decision does not affect the result. Solver-backed or expression-based
-trace minimization may recognize semantic irrelevance later; the initial
-canonical form only removes structurally inactive choices.
+whose cases happen to compute equal values remains an active choice in v1.
+Recognizing and collapsing semantically irrelevant active choices is an
+optional optimization beyond v1.
 
-For binary choice sites, traces may be represented as a mask/value pair. For
-general choices, a sparse ordered map from node ID to outcome is clearer.
-
-## Demand semantics for traces
+### Demand semantics
 
 For a fixed path:
 
 1. Demand the function return node.
 2. Ordinary operations demand their operands.
 3. A concretely resolved select demands its selector and selected case only.
-4. A split symbolic select demands its selector and the selected case for that
-   path.
+4. A split symbolic select demands its selector and selected case for that path.
 5. Unselected cases are not demanded.
 6. A shared node is active if any demanded use reaches it.
 
-Selectors required to compute another selector are part of the demanded cone
-and may themselves contribute choices. This definition gives traces a precise
-operational meaning without claiming to reproduce DSLX source control flow.
+Selectors needed to compute another selector are part of the demanded cone and
+may themselves contribute choices. This definition gives traces a precise
+operational meaning without depending on graph scheduling order.
 
-## Validation strategy
+### Symbolic representation and solver boundary
 
-The initial project seeks strong validation, not a formal proof of the
-implementation or exhaustive path enumeration.
+Symbolic bits and Boolean constraints use a typed, backend-neutral, interned
+expression DAG rather than solver-owned objects or raw SMT-LIB strings as their
+fundamental representation. Here, *backend* means a solver such as Z3,
+Bitwuzla, or Boolector.
 
-### Curated-vector differential testing
+Solver adapters lower the common expression language to a backend and translate
+models back into typed XLS values. V1 requires one complete solver adapter and
+model-conversion path. Multiple solver backends are not a v1 requirement.
 
-For deliberately selected concrete assignments to all symbolic inputs:
+The backend-neutral representation provides expression sharing, concrete
+folding, simplification, deterministic serialization,
+merged-versus-enumerated comparison, and a stable boundary for future solver
+changes.
 
-1. evaluate the symbolic result under the assignment;
-2. run the same inputs through the XLS interpreter or JIT; and
-3. compare the complete typed values.
+### Role of merged evaluation
 
-Curated vectors should include upstream example vectors, structured edge cases
-such as zero, all ones, signed boundaries, powers of two, alternating bits, and
-boundary indices and shifts, plus minimized fuzz failures promoted to permanent
-regressions.
+Merged evaluation compactly preserves symbolic selections as expressions such
+as `ite`. It is supporting infrastructure for v1 rather than the primary
+product:
 
-### Differential fuzz testing
+- it represents the whole function without path duplication;
+- it provides an independent comparison target for the piecewise enumerated
+  result;
+- it enables whole-function equivalence checking against XLS; and
+- it retains symbolic data operations within an enumerated path.
 
-Differential fuzz testing applies the same concrete comparison to generated
-inputs. Small total input spaces should be exhausted. Larger tests should use
-stable per-corpus seeds and bounded case counts in ordinary CI, with broader or
-rotating campaigns available separately. Failures must report enough metadata
-to replay the exact case. Type-aware and correlated generators should be added
-as tuples, arrays, and mixed argument partitions enter the supported corpus.
+A separately stabilized public merged-mode API is optional for v1. The complete
+path-enumeration API is not optional.
 
-### Path-witness replay
+## System boundary
 
-For each feasible enumerated path, solve its path condition, replay one or more
-models concretely, compare the result with XLS, and confirm that the concrete
-selection trace agrees with the symbolic trace. Multiple models per path should
-exercise boundaries within a path; one witness covers control but not all
-arithmetic behavior.
+The intended stack is:
 
-### Symbolic equivalence checking
+```text
+DSLX or textual XLS IR
+          |
+          | xlsynth: parse, typecheck, lower, optimize, concrete replay
+          v
+      textual XLS IR
+          |
+          | xlsynth-pir: native Rust representation and traversal
+          v
+  xlsynth-symex evaluator
+          |
+          +-- concrete and symbolic structured values
+          +-- backend-neutral interned expression DAG
+          +-- complete path enumeration and canonical traces
+          +-- solver adapter and feasibility checks
+          +-- model conversion to XLS values
+```
 
-Where supported, compare the complete symbolic result against XLS's independent
-SMT translation. Ask whether:
+`xlsynth` remains the authoritative boundary for compilation and concrete
+replay. `xlsynth-pir` is the evaluator's native traversal layer, but it is a
+partial function-focused IR. Its coverage is measured and representational
+gaps are handled explicitly rather than assumed away.
 
-\[
-\hat{f}_{\text{xlsynth-symex}}(X) \ne \hat{f}_{\text{XLS}}(X)
-\]
+The symbolic value and evaluator layers do not expose processor or instruction
+concepts. A state transition is simply one possible pure XLS function.
 
-is satisfiable. `UNSAT` establishes equivalence for the modeled inputs and
-operations relative to the trusted XLS translation. `SAT` yields a concrete
-counterexample for replay; timeout or `UNKNOWN` falls back to differential
-testing.
+## Deliberate exclusions
 
-These four names are canonical across design documentation, manifests, tests,
-and reports: **curated-vector differential testing**, **differential fuzz
-testing**, **symbolic equivalence checking**, and **path-witness replay**.
-Every corpus entry and IR form declares each validation as required, blocked by
-a named capability, or not applicable. A blocked validation is neither a pass
-nor a silent skip.
+The following are outside the repository's v1 boundary:
 
-### Enumeration confidence
+- procs and blocks;
+- channels, `send`, and `receive`;
+- tokens and effect-ordering operations;
+- clocks, schedules, pipeline timing, registers, and implicit persistent state;
+- instantiations and block ports;
+- a general or unbounded memory model;
+- cyclic or nonterminating recursion;
+- instruction fetch, ISA dispatch, and instruction-sequence exploration;
+- ISA-specific conventions such as program counters, traps, and privilege; and
+- stable reconstruction of DSLX source paths from optimized IR.
 
-The initial release does not attempt to prove that path enumeration is
-exhaustive. Confidence should come from:
+Token-consuming diagnostics such as assertions, traces, and covers are outside
+the pure-value contract. Treating assertions as input constraints would require
+an explicit semantic design rather than discarding their effects.
 
-- per-choice outcome coverage;
-- branch-flipping test generation;
-- concrete trace replay;
-- differential fuzzing across concrete/symbolic argument partitions;
-- comparison of merged results with reconstructed path results; and
-- mutation tests that omit, relabel, or incorrectly activate choices.
+An XLS array is an ordinary finite value. It does not imply an SMT or processor
+memory model. Explicit architectural state encoded in input and output values
+is supported; hidden state is not.
 
-Functional equivalence remains meaningful even if enumeration is conservative
-or deliberately merged.
-
-## Evaluation corpus
-
-Evaluation should be layered:
-
-1. **Semantic microtests** cover each supported operation with concrete,
-   symbolic, and mixed operands at varied bit widths.
-2. **Curated XLS functions** draw from upstream examples and instantiated DSLX
-   standard-library routines.
-3. **Deterministic generated functions** use fixed XLS fuzzer seeds and bounded
-   graph sizes for broad operation and type coverage.
-4. **Historical crashers** provide adversarial combinations.
-5. **Stress benchmarks** such as SHA-256 and floating-point arithmetic measure
-   expression growth, pruning, and solver behavior without initially gating
-   basic correctness.
-
-Both optimized and unoptimized IR should be tested. Corpus manifests should pin
-the XLS/xlsynth version, upstream revision, function name, argument partition,
-and expected feature requirements.
-
-The curated upstream tier is stored under `tests/corpus/curated`. Tests must be
-offline and reproducible: DSLX fixtures are copied without modification from a
-pinned `xlsynth/xlsynth` commit compatible with the repository's
-`xlsynth-crate` dependency, retain their upstream license notices, and are
-described by a tab-separated manifest. The harness compiles each fixture with
-the bundled DSLX standard library and exercises the selected pure function in
-both unoptimized and optimized IR forms. Deterministic concrete samples are
-evaluated by the XLS interpreter and asserted against the symbolic SMT result.
-Stable per-entry seeds and case budgets drive differential fuzz testing; the
-small `tiny_adder` domain is exhausted. `validation.tsv` is the checked-in
-outcome report for all four validation modes and both IR forms: differential
-cells record `pass:<case-count>`, successful equivalence cells record `unsat`,
-and unavailable checks retain a named `blocked:<capability>` status. Tests
-cross-check its counts against the manifest and curated vectors and rerun every
-reported passing validation, preventing the table from silently drifting from
-the executable corpus.
-
-The curated slice currently covers widened addition (`tiny_adder`), nested
-selection (`nested_sel`), the opcode decoder from `riscv_simple`, and tuple- and
-multiplication-heavy overflow detection (`overflow_detect`). An eight-bit LFSR
-adds bounded loops, dynamic slicing, concatenation, and XOR-heavy logic. Corpus
-function `find_index` adds structured array inputs and tuple results, symbolic
-array indexing and update, and priority encoding. Required differential checks
-gate independently for both IR forms; unsupported validation combinations carry
-an explicit capability status rather than being silently skipped.
-
-Symbolic equivalence is required for every currently supported curated function
-and IR form where XLS's reference translator can produce a query. A known XLS
-translator abort on the zero-width-heavy unoptimized overflow example is
-recorded as an explicit reference-side blocker; the optimized form proves
-equivalent. The harness reconstructs finite arrays and compares tuple leaves to
-prove optimized `find_index` equivalent as well. Its unoptimized form remains
-blocked because the XLS reference translator does not support `counted_for`;
-both differential modes are still required. Until explicit path enumeration
-and canonical selection traces exist, path-witness replay remains blocked. The
-corpus matrix records these limitations explicitly.
-
-Useful measurements include operation and type coverage, expression DAG size,
-paths and choice outcomes, concretely pruned selects, visited IR nodes,
-construction and solving time, and peak memory. For mixed evaluation, a useful
-metric is the reduction in visited nodes when discriminator arguments are
-concrete.
-
-## Non-goals for initial development
-
-- Whole-ISA or whole-processor symbolic execution.
-- Unbounded or SMT-array memory semantics.
-- Stateful XLS proc execution.
-- Stable source-level coverage identities.
-- A proof that all paths have been enumerated.
-- Solver-independent formal verification of the implementation.
-- Exhaustively splitting every mux-like data operation.
-
-## Initial milestones
-
-1. Parse and traverse a small pure function IR.
-2. Implement concrete and symbolic bit values and expression interning.
-3. Match concrete XLS semantics for a core set of bit operations.
-4. Add tuples and fixed-size arrays.
-5. Implement demand-driven mixed evaluation and concrete select pruning.
-6. Add merged select expressions and configurable path splitting.
-7. Define and test canonical selection traces with inactive choices.
-8. Integrate one solver and model-to-XLS-value conversion.
-9. Build differential, path-witness, and symbolic-equivalence harnesses.
-10. Run curated and deterministic generated corpora and publish coverage gaps.
-
-## Open questions
-
-- Which `xlsynth-pir` operations and types are sufficiently complete and stable?
-- What expression representation and solver adapter API should be used?
-- Which solver should be the first backend?
-- What should be the exact default split policy for non-exclusive selections?
-- How should invokes and finite loops appear in traces before and after
-  inlining?
-- How should node identities and function fingerprints be represented?
-- When is known-bit propagation worth adding to mixed evaluation?
-- Should ahead-of-time specialized Rust or IR generation become a supported
-  output, or remain an optimization internal to evaluation?
+Whole-machine symbolic execution, proc execution, unbounded memory semantics,
+and hardware timing remain downstream or separate-project concerns after v1 as
+well; they are not deferred obligations for this repository.

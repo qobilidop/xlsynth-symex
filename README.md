@@ -1,58 +1,38 @@
 # xlsynth-symex
 
-Symbolic evaluation of pure [XLS](https://github.com/google/xls) functions in
-Rust, built around the [xlsynth](https://github.com/xlsynth/xlsynth-crate)
-ecosystem.
-
-This project is in its initial design and prototyping phase. Its intended core
-operation is:
+Symbolic evaluation and exhaustive path generation for pure
+[XLS](https://github.com/google/xls) functions in Rust, built around the
+[xlsynth](https://github.com/xlsynth/xlsynth-crate) ecosystem.
 
 ```text
-XLS function + concrete/symbolic arguments
-    -> symbolic results + path conditions + selection traces
+pure XLS function + concrete/symbolic arguments
+    -> every feasible canonical path
+       + constraints + symbolic results + selection traces
 ```
 
-The initial scope is deliberately narrow: pure XLS IR functions over bits,
-tuples, and fixed-size arrays. Stateful XLS constructs and whole-machine
-symbolic execution are not part of the library.
+The library is scoped to finite pure functions over bits, tuples, and fixed-size
+arrays. Stateful XLS constructs, hardware timing, unbounded memory, and
+whole-machine symbolic execution are outside the project boundary.
 
 ## Development
 
-Run development commands in the Ubuntu-based development container:
+Run project commands in the checked-in development container:
 
 ```text
 ./dev.sh cargo test --workspace
 ./dev.sh cargo fmt --all -- --check
-./dev.sh cargo clippy --all-targets -- -D warnings
-./dev.sh
+./dev.sh cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`dev.sh` pulls `ghcr.io/qobilidop/xlsynth-symex/dev:main` on first use and
-falls back to a local build if the image has not been published yet. Use
-`./dev.sh --pull` to refresh it or `./dev.sh --build` to rebuild it locally.
-Set `XLSYNTH_SYMEX_DEV_IMAGE` to select another registry or immutable SHA tag.
+Run `./dev.sh` without a command for an interactive shell. The wrapper uses the
+checked-in development environment shared with CI.
 
-Editors supporting the Development Containers specification can use
-`.devcontainer/devcontainer.json` directly. GitHub Actions validates the image
-on pull requests and publishes it after relevant changes land on `main`.
+## Documentation
 
-## Current implementation
-
-The current native bits evaluator traverses XLS IR through `xlsynth-pir` and
-constructs independent SMT bit-vector expressions for core arithmetic,
-Boolean, comparison, extension, selection, invocation, slicing, reductions,
-structural tuple operations, and statically bounded `counted_for` loops.
-Tests run deterministic generated IR programs against Z3 and the XLS
-interpreter. An offline curated corpus also compiles pinned upstream XLS
-examples and checks selected pure functions in optimized and unoptimized forms.
-See `tests/corpus/curated/README.md` for its provenance and extension workflow.
-The corpus requires curated-vector differential testing, deterministic
-differential fuzz testing, and independent symbolic equivalence checking;
-path-witness replay remains explicitly blocked on selection traces.
-
-See:
-
-- [Design](docs/design.md) for the current, authoritative design.
-- [Research](docs/research.md) for related work and evaluation corpora.
-- [Initial discussion notes](docs/notes/2026-08-01-initial-design-discussion.md)
-  for the temporary historical record of the project's formative discussion.
+- [V1 design](docs/design.md): the normative end state and project boundary.
+- [Verification](docs/verification.md): the evidence required to call v1 done.
+- [Status](docs/status.md): the current implementation and validation snapshot.
+- [Roadmap](docs/roadmap.md): the path to v1 and optional work beyond it.
+- [Research](docs/research.md): prior art and evaluation sources.
+- [Historical notes](docs/notes/): superseded design discussion and prototype
+  records.
