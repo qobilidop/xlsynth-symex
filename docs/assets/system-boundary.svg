@@ -91,15 +91,15 @@
   <rect class="solver" x="900" y="382" width="120" height="160" rx="14"/>
   <text class="label" x="960" y="416" text-anchor="middle">solver</text>
   <text class="label" x="960" y="438" text-anchor="middle">adapter</text>
-  <text class="small" x="960" y="472" text-anchor="middle">SMT-LIB</text>
-  <text class="small" x="960" y="495" text-anchor="middle">model parsing</text>
+  <text class="small" x="960" y="472" text-anchor="middle">incremental</text>
+  <text class="small" x="960" y="495" text-anchor="middle">queries · models</text>
   <text class="tiny" x="960" y="524" text-anchor="middle">replaceable boundary</text>
 
   <path class="edge" d="M1020 450 L1060 450"/>
   <path class="edge" d="M1060 476 L1020 476"/>
   <rect class="solver" x="1060" y="420" width="90" height="84" rx="42"/>
   <text class="label" x="1105" y="457" text-anchor="middle">Z3</text>
-  <text class="small" x="1105" y="480" text-anchor="middle">today</text>
+  <text class="small" x="1105" y="480" text-anchor="middle">persistent</text>
 
   <path class="return-edge" d="M590 572 L590 630"/>
   <rect class="output" x="386" y="630" width="408" height="86" rx="14"/>
