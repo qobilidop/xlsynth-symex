@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
   <title id="title">System boundary and ownership layers of xlsynth-symex</title>
-  <desc id="desc">DSLX or textual IR is compiled and parsed by xlsynth, traversed through xlsynth-pir, evaluated by the backend-neutral xlsynth-symex core, and optionally sent through a replaceable Z3 adapter. Selection witnesses are replayed through the independent XLS interpreter, while whole-machine execution remains downstream.</desc>
+  <desc id="desc">DSLX or textual IR is compiled and parsed by xlsynth, traversed through xlsynth-pir, and evaluated inside the dashed boundary of the backend-neutral xlsynth-symex core. Solver queries pass through a replaceable adapter to Z3, which returns status and model data. Selection witnesses are replayed through the independent XLS interpreter, while whole-machine execution remains downstream.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
@@ -95,7 +95,8 @@
   <text class="small" x="960" y="495" text-anchor="middle">model parsing</text>
   <text class="tiny" x="960" y="524" text-anchor="middle">replaceable boundary</text>
 
-  <path class="edge" d="M1020 462 L1060 462"/>
+  <path class="edge" d="M1020 450 L1060 450"/>
+  <path class="edge" d="M1060 476 L1020 476"/>
   <rect class="solver" x="1060" y="420" width="90" height="84" rx="42"/>
   <text class="label" x="1105" y="457" text-anchor="middle">Z3</text>
   <text class="small" x="1105" y="480" text-anchor="middle">today</text>

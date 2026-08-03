@@ -11,7 +11,7 @@
       .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
       .demand { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
       .candidate { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
-      .constraint { fill: #ecfeff; stroke: #0891b2; stroke-width: 2; }
+      .constraint { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; }
       .solver { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; }
       .sat { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
       .unsat { fill: #f1f5f9; stroke: #64748b; stroke-width: 2; }
@@ -94,14 +94,15 @@
   <text class="tiny" x="876" y="374" text-anchor="middle">Currently one process</text>
   <text class="tiny" x="876" y="391" text-anchor="middle">per candidate.</text>
 
-  <path class="green-edge" d="M960 188 L994 188"/>
-  <rect class="sat" x="994" y="112" width="176" height="158" rx="14"/>
-  <text class="status-green" x="1012" y="136">SAT</text>
-  <text class="label" x="1082" y="163" text-anchor="middle">GuardedResult</text>
-  <text class="small" x="1082" y="189" text-anchor="middle">guard + residual result</text>
-  <text class="small" x="1082" y="212" text-anchor="middle">canonical trace</text>
-  <text class="small" x="1082" y="235" text-anchor="middle">typed XLS witness</text>
-  <text class="tiny" x="1082" y="255" text-anchor="middle">model + concrete inputs</text>
+  <text class="heading" x="1004" y="116">5 · RESULT</text>
+  <path class="green-edge" d="M960 196 L994 196"/>
+  <rect class="sat" x="994" y="132" width="176" height="144" rx="14"/>
+  <text class="status-green" x="1012" y="154">SAT</text>
+  <text class="label" x="1082" y="178" text-anchor="middle">GuardedResult</text>
+  <text class="small" x="1082" y="202" text-anchor="middle">guard + residual result</text>
+  <text class="small" x="1082" y="224" text-anchor="middle">canonical trace</text>
+  <text class="small" x="1082" y="246" text-anchor="middle">typed XLS witness</text>
+  <text class="tiny" x="1082" y="265" text-anchor="middle">model + concrete inputs</text>
 
   <path class="gray-edge" d="M960 245 L994 332"/>
   <rect class="unsat" x="994" y="296" width="176" height="84" rx="14"/>
@@ -127,10 +128,11 @@
   <rect class="error" x="386" y="570" width="178" height="52" rx="11"/>
   <text class="mono" x="475" y="602" text-anchor="middle">Err(…)</text>
 
-  <rect x="622" y="560" width="304" height="72" rx="11" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
-  <text class="small" x="774" y="583" text-anchor="middle">Limits and indeterminate solving</text>
-  <text class="small" x="774" y="602" text-anchor="middle">produce useful partial results with</text>
-  <text class="small" x="774" y="621" text-anchor="middle">explicit incomplete status.</text>
+  <rect x="994" y="560" width="176" height="98" rx="11" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text class="tiny" x="1082" y="583" text-anchor="middle">Limits and indeterminate</text>
+  <text class="tiny" x="1082" y="601" text-anchor="middle">solving produce useful</text>
+  <text class="tiny" x="1082" y="619" text-anchor="middle">partial results with explicit</text>
+  <text class="tiny" x="1082" y="637" text-anchor="middle">incomplete status.</text>
 
   <rect x="240" y="712" width="720" height="34" rx="17" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
   <text class="label" x="600" y="735" text-anchor="middle">Complete means every feasible canonical candidate survived this process exactly once.</text>

@@ -34,7 +34,7 @@
   <text class="subtitle" x="40" y="73">The value semantics are shared; enumeration additionally preserves the identity and domain of active selections.</text>
 
   <rect class="panel" x="40" y="100" width="390" height="690" rx="16"/>
-  <text class="heading" x="64" y="132">XLS DATAFLOW GRAPH</text>
+  <text class="heading" x="64" y="132">1 · XLS DATAFLOW GRAPH</text>
 
   <rect class="value" x="66" y="158" width="56" height="40" rx="9"/>
   <text class="label" x="94" y="183" text-anchor="middle">A</text>
@@ -82,7 +82,7 @@
   <text class="small" x="64" y="778">Parallel selections contribute jointly to one trace.</text>
 
   <rect class="panel" x="455" y="100" width="310" height="690" rx="16"/>
-  <text class="heading" x="479" y="132">MERGED EVALUATION</text>
+  <text class="heading" x="479" y="132">2 · MERGED EVALUATION</text>
   <text class="small" x="479" y="161">Selections become conditional values.</text>
   <rect class="value" x="480" y="205" width="260" height="142" rx="14"/>
   <text class="label" x="610" y="237" text-anchor="middle">one compact result</text>
@@ -101,7 +101,7 @@
   <text class="small" x="479" y="727">semantic core of every residual result.</text>
 
   <rect class="panel" x="790" y="100" width="570" height="690" rx="16"/>
-  <text class="heading" x="814" y="132">SELECTION ENUMERATION</text>
+  <text class="heading" x="814" y="132">3 · SELECTION ENUMERATION</text>
   <text class="small" x="814" y="161">Six unique traces partition all eight selector assignments.</text>
 
   <text class="tiny" x="818" y="194">CANONICAL SELECTION TRACE</text>

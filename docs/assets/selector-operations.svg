@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="780" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
   <title id="title">Three interpretations of the same XLS selector bits</title>
-  <desc id="desc">Given selector 0b101, cases C0 equals 0b0011, C1 equals 0b0101, C2 equals 0b1001, and default D equals 0b1111: sel treats 0b101 as numeric index 5 and chooses the out-of-range default; priority_sel treats set bits as requests and chooses case zero because the least-significant set bit has highest priority; one_hot_sel treats set bits as independent enables and returns the bitwise OR of cases zero and two, 0b1011. The corresponding canonical outcomes and guards are shown.</desc>
+  <desc id="desc">Given selector 0b101, cases C0 equals 0b0011, C1 equals 0b0101, C2 equals 0b1001, and default D equals 0b1111 for sel and priority_sel only: sel treats 0b101 as numeric index 5 and chooses the out-of-range default; priority_sel treats set bits as requests and chooses case zero because the least-significant set bit has highest priority; one_hot_sel has no default, treats set bits as independent enables, and returns the bitwise OR of cases zero and two, 0b1011. The corresponding canonical outcomes and guards are shown.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
@@ -47,7 +47,8 @@
   <rect class="neutral" x="676" y="142" width="174" height="36" rx="9"/>
   <text class="mono" x="763" y="165" text-anchor="middle">C2 = 0b1001</text>
   <rect class="neutral" x="900" y="142" width="174" height="36" rx="9"/>
-  <text class="mono" x="987" y="165" text-anchor="middle">D = 0b1111</text>
+  <text class="mono-small" x="987" y="158" text-anchor="middle">D = 0b1111</text>
+  <text class="tiny" x="987" y="174" text-anchor="middle">sel / priority_sel default</text>
   <text class="small" x="1120" y="157">Case indices and selector bits</text>
   <text class="small" x="1120" y="176">are numbered from zero at the LSB.</text>
 

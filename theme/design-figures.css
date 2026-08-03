@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Keep prose at mdBook's readable line length while allowing detailed SVG
+ * figures to use the space beside it. Linked figures remain discoverably
+ * openable at their full intrinsic size.
+ */
+.content main > p:has(> a[href$=".svg"] > img[src$=".svg"]) {
+    width: min(
+        1200px,
+        calc(100vw - var(--sidebar-target-width) - (4 * var(--page-padding)))
+    );
+    max-width: calc(100vw - (2 * var(--page-padding)));
+    margin-inline: 50%;
+    transform: translateX(-50%);
+}
+
+.content main > p > a[href$=".svg"]:has(> img[src$=".svg"]),
+.content main > p > a[href$=".svg"] > img[src$=".svg"] {
+    display: block;
+    width: 100%;
+}
+
+@media only screen and (max-width: 1080px) {
+    .content main > p:has(> a[href$=".svg"] > img[src$=".svg"]) {
+        width: calc(100vw - (2 * var(--page-padding)));
+    }
+}

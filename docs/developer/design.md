@@ -25,6 +25,40 @@ invariants:
 - unsupported effects and state are rejected rather than approximated as pure
   values.
 
+## Dataflow, not control flow
+
+Consider a source-level conditional over one-bit `p`:
+
+```text
+if p { x + 1 } else { x - 1 }
+```
+
+A conventional control-flow graph and XLS IR represent that conditional in
+different ways:
+
+[![The same conditional represented as a conventional control-flow graph and an XLS dataflow graph](../assets/dataflow-vs-control-flow.svg)](../assets/dataflow-vs-control-flow.svg)
+
+| Question | Conventional control-flow graph | XLS IR dataflow graph |
+|---|---|---|
+| What is a vertex? | A basic block containing work to execute | An operation that produces a value |
+| What is an edge? | A possible transfer to the next block | A value dependency between operations |
+| What does `p` choose? | Which block executes next | Which input value `sel` returns |
+| How do alternatives rejoin? | Control reaches a merge block, often with a phi value | Both value cones feed the same `sel` operation |
+| What is a graph path? | A sequence of executed blocks and control-flow edges | A directed route through value-dependency edges; not an enumeration unit |
+
+The XLS graph contains `add`, `sub`, and `sel` nodes connected by values; it
+has no program counter, branch instruction, or transfer of control between
+those nodes. A selection is a value multiplexer. Consequently,
+`xlsynth-symex` enumerates canonical selection traces rather than control-flow
+or dataflow paths, and does not claim to recreate the original DSLX branches.
+
+“Eager dataflow” describes the XLS value semantics, not an obligation for this
+implementation to construct every operand cone up front. Because the supported
+functions are pure, once a concrete selector or candidate trace fixes an
+outcome, demand-driven evaluation can omit the inactive value cone without
+changing the returned value. The mechanics are described in
+[`Demand-driven evaluation`](#demand-driven-evaluation).
+
 ## Mental model
 
 The core behavior can be seen in a function with nested and parallel one-bit
@@ -45,14 +79,14 @@ though both cases are `D`; otherwise enumeration would silently erase a
 selection the IR declares. Merged evaluation preserves the graph as one
 conditional value, while enumeration exposes six guarded results.
 
-![One XLS graph with nested, parallel, and equal-valued selections represented as one merged expression and six guarded results](../assets/one-graph-two-views.svg)
+[![One XLS graph with nested, parallel, and equal-valued selections represented as one merged expression and six guarded results](../assets/one-graph-two-views.svg)](../assets/one-graph-two-views.svg)
 
 *The two entry-point families share value semantics. Enumeration changes how
 selection operations are represented, not what the XLS function computes.*
 
-This example is intentionally a dataflow graph rather than a control-flow
-graph. The remainder of the design explains how values, demanded nodes,
-candidate states, solver queries, and typed witnesses realize this model.
+The remainder of the design gives this dataflow model a precise vocabulary,
+then explains how values, demanded nodes, candidate states, solver queries,
+and typed witnesses realize it.
 
 ## Terminology
 
@@ -76,40 +110,6 @@ In XLS documentation and graph theory it already denotes a route through
 data-dependency edges; in conventional symbolic execution it usually denotes a
 sequence of control-flow decisions. Neither meaning describes a sparse map over
 possibly parallel XLS selection sites.
-
-## Dataflow, not control flow
-
-Consider a source-level conditional over one-bit `p`:
-
-```text
-if p { x + 1 } else { x - 1 }
-```
-
-A conventional control-flow graph and XLS IR represent that conditional in
-different ways:
-
-![The same conditional represented as a conventional control-flow graph and an XLS dataflow graph](../assets/dataflow-vs-control-flow.svg)
-
-| Question | Conventional control-flow graph | XLS IR dataflow graph |
-|---|---|---|
-| What is a vertex? | A basic block containing work to execute | An operation that produces a value |
-| What is an edge? | A possible transfer to the next block | A value dependency between operations |
-| What does `p` choose? | Which block executes next | Which input value `sel` returns |
-| How do alternatives rejoin? | Control reaches a merge block, often with a phi value | Both value cones feed the same `sel` operation |
-| What is a graph path? | A sequence of executed blocks and control-flow edges | A directed route through value-dependency edges; not an enumeration unit |
-
-The XLS graph contains `add`, `sub`, and `sel` nodes connected by values; it
-has no program counter, branch instruction, or transfer of control between
-those nodes. A selection is a value multiplexer. Consequently,
-`xlsynth-symex` enumerates canonical selection traces rather than control-flow
-or dataflow paths, and does not claim to recreate the original DSLX branches.
-
-“Eager dataflow” describes the XLS value semantics, not an obligation for this
-implementation to construct every operand cone up front. Because the supported
-functions are pure, once a concrete selector or candidate trace fixes an
-outcome, demand-driven evaluation can omit the inactive value cone without
-changing the returned value. The mechanics are described in
-[`Demand-driven evaluation`](#demand-driven-evaluation).
 
 ## How the three selection operations differ
 
@@ -141,7 +141,7 @@ The following example uses the same selector and case values for all three
 operations. It demonstrates why visually similar selector wiring does not
 imply the same result or guard:
 
-![The same selector interpreted as a numeric index by sel, a priority request vector by priority_sel, and an enable mask by one_hot_sel](../assets/selector-operations.svg)
+[![The same selector interpreted as a numeric index by sel, a priority request vector by priority_sel, and an enable mask by one_hot_sel](../assets/selector-operations.svg)](../assets/selector-operations.svg)
 
 With the values shown in the illustration, three selector patterns expose the
 distinction:
@@ -172,12 +172,12 @@ own outcomes, guards, residual value, and potential enumeration cost.
 
 The implementation deliberately composes existing xlsynth layers:
 
-![Layered system boundary from XLS source through the backend-neutral symbolic core to solver adapters and downstream consumers](../assets/system-boundary.svg)
+[![Layered system boundary from XLS source through the backend-neutral symbolic core to solver adapters and downstream consumers](../assets/system-boundary.svg)](../assets/system-boundary.svg)
 
-*The orange region is the backend-neutral symbolic core. Z3 is behind a narrow
-adapter, concrete XLS replay is an independent validation oracle, and
-whole-machine execution consumes results downstream rather than entering this
-crate.*
+*The dashed blue boundary is the backend-neutral symbolic core; its orange
+region performs typed symbolic evaluation. Z3 is behind a narrow adapter,
+concrete XLS replay is an independent validation oracle, and whole-machine
+execution consumes results downstream rather than entering this crate.*
 
 `xlsynth` remains the authoritative concrete semantics and independent SMT
 reference used by validation. `xlsynth-pir` is the native traversal layer. Its
@@ -198,7 +198,7 @@ transitions remains outside this crate.
 - tuples contain ordered symbolic values; and
 - arrays contain a fixed number of ordered symbolic values.
 
-![A recursive symbolic value tree whose bits leaves share typed nodes in an interned expression DAG](../assets/symbolic-values.svg)
+[![A recursive symbolic value tree whose bits leaves share typed nodes in an interned expression DAG](../assets/symbolic-values.svg)](../assets/symbolic-values.svg)
 
 *XLS aggregates retain their finite recursive shape. Only bits leaves refer to
 expression nodes, and public identities remain structural until an adapter
@@ -277,7 +277,7 @@ Caller constraints use a small backend-neutral Boolean and bit-vector language.
 Lowering validates that referenced leaves are symbolic and that operand widths
 match before adding the expressions to the common DAG.
 
-![Candidate lifecycle from demand-driven construction through constraints and solving to a guarded result, pruning, or incomplete result](../assets/candidate-lifecycle.svg)
+[![Candidate lifecycle from demand-driven construction through constraints and solving to a guarded result, pruning, or incomplete result](../assets/candidate-lifecycle.svg)](../assets/candidate-lifecycle.svg)
 
 *Candidate construction, feasibility, and request validity are separate
 stages. In particular, solver indeterminacy produces explicit incompleteness;
