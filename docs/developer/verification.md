@@ -86,7 +86,6 @@ The evidence is layered and checked into the repository:
 | Coverage, trace sets, and mutations | [`tests/enumeration_completeness.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/enumeration_completeness.rs) |
 | Pinned upstream corpus | [`tests/curated_corpus.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/curated_corpus.rs) and [`validation.tsv`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/corpus/curated/validation.tsv) |
 | Bounded performance guard | [`tests/release_metrics.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/release_metrics.rs) |
-| Repository and license rules | [`tests/repository_conventions.rs`](https://github.com/qobilidop/xlsynth-symex/blob/main/tests/repository_conventions.rs) |
 
 The support matrix currently contains 65 supported pure-value operations and 8
 explicit exclusions. Every supported row names an executable test target, and
