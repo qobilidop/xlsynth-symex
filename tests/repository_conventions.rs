@@ -111,6 +111,34 @@ fn maintained_svg_assets_are_accessible() {
 }
 
 #[test]
+fn workflow_filenames_match_workflow_names() {
+    let workflow_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    let mut mismatches = Vec::new();
+    for entry in fs::read_dir(workflow_directory).expect("workflow directory must be readable") {
+        let path = entry.expect("workflow entry must be readable").path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yaml" | "yml")
+        ) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("workflow must be UTF-8");
+        let workflow_name = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("name: "))
+            .expect("workflow must have a top-level name");
+        let expected_stem = workflow_name.to_ascii_lowercase().replace(' ', "-");
+        if path.file_stem().and_then(|stem| stem.to_str()) != Some(expected_stem.as_str()) {
+            mismatches.push((path, workflow_name.to_owned()));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "workflow filenames must match normalized workflow names: {mismatches:#?}"
+    );
+}
+
+#[test]
 fn maintained_text_is_canonical() {
     let mut missing_final_newline = Vec::new();
     let mut trailing_whitespace = Vec::new();

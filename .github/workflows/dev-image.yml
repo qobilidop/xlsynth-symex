@@ -8,12 +8,12 @@ on:
     paths:
       - .devcontainer/Dockerfile
       - rust-toolchain.toml
-      - .github/workflows/dev-container.yml
+      - .github/workflows/dev-image.yml
   pull_request:
     paths:
       - .devcontainer/Dockerfile
       - rust-toolchain.toml
-      - .github/workflows/dev-container.yml
+      - .github/workflows/dev-image.yml
   workflow_dispatch:
 
 concurrency:
