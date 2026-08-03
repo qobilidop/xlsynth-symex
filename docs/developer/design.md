@@ -48,6 +48,41 @@ This example is intentionally a dataflow graph rather than a control-flow
 graph. The remainder of the design explains how values, demanded nodes,
 candidate states, solver queries, and typed witnesses realize this model.
 
+## Dataflow, not control flow
+
+Consider a source-level conditional over one-bit `p`:
+
+```text
+if p { x + 1 } else { x - 1 }
+```
+
+A conventional control-flow graph and XLS IR represent that conditional in
+different ways:
+
+![The same conditional represented as a conventional control-flow graph and an XLS dataflow graph](../assets/dataflow-vs-control-flow.svg)
+
+| Question | Conventional control-flow graph | XLS IR dataflow graph |
+|---|---|---|
+| What is a vertex? | A basic block containing work to execute | An operation that produces a value |
+| What is an edge? | A possible transfer to the next block | A value dependency between operations |
+| What does `p` choose? | Which block executes next | Which input value `sel` returns |
+| How do alternatives rejoin? | Control reaches a merge block, often with a phi value | Both value cones feed the same `sel` operation |
+| What is a path? | A sequence of executed blocks | For this project, a feasible outcome assignment to declared selection operations |
+
+The XLS graph contains `add`, `sub`, and `sel` nodes connected by values; it
+has no program counter, branch instruction, or transfer of control between
+those nodes. A selection is a value multiplexer. Consequently, a canonical
+`xlsynth-symex` path is not a control-flow trace and does not claim to recreate
+the original DSLX branches. It is a sparse partial valuation of active
+selection nodes in the demanded dataflow slice.
+
+“Eager dataflow” describes the XLS value semantics, not an obligation for this
+implementation to construct every operand cone up front. Because the supported
+functions are pure, once a concrete selector or candidate path fixes an
+outcome, demand-driven evaluation can omit the inactive value cone without
+changing the returned value. The mechanics are described in
+[`Demand-driven evaluation`](#demand-driven-evaluation).
+
 ## System boundary
 
 The implementation deliberately composes existing xlsynth layers:

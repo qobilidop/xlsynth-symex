@@ -1,0 +1,106 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">The same conditional as a control-flow graph and an XLS dataflow graph</title>
+  <desc id="desc">On the left, a condition transfers execution to either an add block or a subtract block before control rejoins. On the right, add and subtract are value-producing nodes whose outputs feed a selection node. The selector chooses the returned value rather than the next block to execute.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .control { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; }
+      .value { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+      .choice { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .result { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+      .title { font: 700 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .heading { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1px; fill: #334155; }
+      .label { font: 650 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .edge-label { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 500 14px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #0f172a; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+      .fanout { fill: none; stroke: #2563eb; stroke-width: 2; marker-end: url(#arrow); }
+      .select-edge { fill: none; stroke: #c2410c; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="700" rx="18"/>
+  <text class="title" x="40" y="46">A branch chooses execution; an XLS selector chooses a value</text>
+  <text class="subtitle" x="40" y="73">The source-level conditional is the same, but the two graph models encode it differently.</text>
+
+  <rect class="panel" x="40" y="100" width="540" height="500" rx="16"/>
+  <text class="heading" x="64" y="132">CONVENTIONAL CONTROL-FLOW GRAPH</text>
+  <text class="small" x="64" y="158">Vertices are basic blocks; edges are possible transfers of control.</text>
+
+  <path class="control" d="M310 184 L390 229 L310 274 L230 229 Z"/>
+  <text class="label" x="310" y="225" text-anchor="middle">test p</text>
+  <text class="small" x="310" y="245" text-anchor="middle">choose next block</text>
+
+  <path class="edge" d="M249 251 C205 282 180 301 170 330"/>
+  <path class="edge" d="M371 251 C415 282 440 301 450 330"/>
+  <text class="edge-label" x="205" y="285">p = 1</text>
+  <text class="edge-label" x="405" y="285">p = 0</text>
+
+  <rect class="control" x="95" y="330" width="150" height="74" rx="12"/>
+  <text class="label" x="170" y="358" text-anchor="middle">then block</text>
+  <text class="mono" x="170" y="384" text-anchor="middle">x + 1</text>
+
+  <rect class="control" x="375" y="330" width="150" height="74" rx="12"/>
+  <text class="label" x="450" y="358" text-anchor="middle">else block</text>
+  <text class="mono" x="450" y="384" text-anchor="middle">x - 1</text>
+
+  <path class="edge" d="M170 404 C180 444 222 460 263 474"/>
+  <path class="edge" d="M450 404 C440 444 398 460 357 474"/>
+  <rect class="result" x="235" y="470" width="150" height="68" rx="12"/>
+  <text class="label" x="310" y="498" text-anchor="middle">merge</text>
+  <text class="small" x="310" y="520" text-anchor="middle">return chosen result</text>
+
+  <rect x="95" y="557" width="430" height="27" rx="13" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.5"/>
+  <text class="small" x="310" y="576" text-anchor="middle">One execution follows one branch through the graph.</text>
+
+  <rect class="panel" x="620" y="100" width="540" height="500" rx="16"/>
+  <text class="heading" x="644" y="132">XLS IR DATAFLOW GRAPH</text>
+  <text class="small" x="644" y="158">Vertices produce values; edges carry operands and results.</text>
+
+  <rect class="value" x="660" y="188" width="78" height="46" rx="10"/>
+  <text class="mono" x="699" y="217" text-anchor="middle">x</text>
+  <rect class="value" x="808" y="188" width="78" height="46" rx="10"/>
+  <text class="mono" x="847" y="217" text-anchor="middle">1</text>
+  <rect class="value" x="1042" y="188" width="78" height="46" rx="10"/>
+  <text class="mono" x="1081" y="217" text-anchor="middle">p</text>
+
+  <path class="fanout" d="M699 234 C699 270 728 277 750 300"/>
+  <path class="fanout" d="M699 234 C699 272 692 337 750 366"/>
+  <path class="fanout" d="M847 234 C847 270 818 277 796 300"/>
+  <path class="fanout" d="M847 234 C847 272 854 337 796 366"/>
+
+  <rect class="value" x="720" y="300" width="106" height="54" rx="12"/>
+  <text class="label" x="773" y="323" text-anchor="middle">add</text>
+  <text class="mono" x="773" y="343" text-anchor="middle">x + 1</text>
+  <rect class="value" x="720" y="366" width="106" height="54" rx="12"/>
+  <text class="label" x="773" y="389" text-anchor="middle">sub</text>
+  <text class="mono" x="773" y="409" text-anchor="middle">x - 1</text>
+
+  <path class="select-edge" d="M826 327 C871 327 878 359 918 369"/>
+  <path class="select-edge" d="M826 393 C871 393 878 377 918 373"/>
+  <path class="select-edge" d="M1081 234 C1081 286 1048 342 1022 360"/>
+  <text class="edge-label" x="852" y="318">case 1</text>
+  <text class="edge-label" x="852" y="414">case 0</text>
+  <text class="edge-label" x="1037" y="306">selector</text>
+
+  <rect class="choice" x="918" y="342" width="116" height="64" rx="12"/>
+  <text class="label" x="976" y="369" text-anchor="middle">sel</text>
+  <text class="small" x="976" y="391" text-anchor="middle">choose value</text>
+  <path class="edge" d="M976 406 L976 466"/>
+  <rect class="result" x="901" y="466" width="150" height="68" rx="12"/>
+  <text class="label" x="976" y="494" text-anchor="middle">return</text>
+  <text class="small" x="976" y="516" text-anchor="middle">selected value</text>
+
+  <rect x="665" y="557" width="450" height="27" rx="13" fill="#ffedd5" stroke="#c2410c" stroke-width="1.5"/>
+  <text class="small" x="890" y="576" text-anchor="middle">No control transfers between add, sub, and sel.</text>
+
+  <rect x="175" y="628" width="850" height="42" rx="21" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text class="label" x="600" y="654" text-anchor="middle">Here, a symbolic “path” is a feasible sel outcome—not an executed-basic-block trace.</text>
+</svg>
